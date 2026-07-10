@@ -9,6 +9,7 @@ import csv
 import html
 import json
 import math
+import mimetypes
 import os
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import Wrench_or_Skein as wrench
-#hi
+
 
 APP_DIR = Path(__file__).resolve().parent
 X_FOLDER_NAME = "hourglass_disk_4x4_promotion_reps_graph_data"
@@ -25,12 +26,16 @@ ALL_FOLDER_NAME = "hourglass_disk_4x4_all_graph_data"
 ALL_FOLDER_ALIASES = (ALL_FOLDER_NAME, "4x4_All_graph_data")
 SURVIVOR_CSV_NAME = "lemma46_survivors.csv"
 PROMOTION_TABLE_PATH = Path("hourglass_disk_4x4_promotion_reps") / "promotion_orbits_4x4.tsv"
+IMAGE_EXPLORER_HTML_NAME = "web_explorer_v3.html"
+REP_IMAGE_FOLDER_NAME = "hourglass_disk_4x4_promotion_reps"
 PROJECT_ROOT = Path(os.environ.get("PROBLEM3_ROOT", APP_DIR)).expanduser().resolve()
 X_DIR = PROJECT_ROOT / X_FOLDER_NAME
 W_DIR = PROJECT_ROOT / W_FOLDER_NAME
 ALL_DIR = PROJECT_ROOT / ALL_FOLDER_NAME
 SURVIVOR_CSV = PROJECT_ROOT / SURVIVOR_CSV_NAME
 PROMOTION_TABLE = PROJECT_ROOT / PROMOTION_TABLE_PATH
+IMAGE_EXPLORER_HTML = PROJECT_ROOT / IMAGE_EXPLORER_HTML_NAME
+REP_IMAGE_DIR = PROJECT_ROOT / REP_IMAGE_FOLDER_NAME
 _SURVIVOR_CACHE: Optional[Tuple[float, Dict[str, Any]]] = None
 _PROMOTION_ORBIT_CACHE: Optional[Dict[int, List[str]]] = None
 _PROMOTION_REP_CACHE: Optional[Dict[str, Tuple[int, str]]] = None
@@ -51,6 +56,74 @@ COLORS = {
 }
 
 
+def unique_existing_paths(paths: Iterable[Path]) -> List[Path]:
+    seen = set()
+    out = []
+    for path in paths:
+        try:
+            resolved = path.expanduser().resolve()
+        except Exception:  # noqa: BLE001 - best-effort path discovery.
+            continue
+        if resolved in seen or not resolved.exists():
+            continue
+        seen.add(resolved)
+        out.append(resolved)
+    return out
+
+
+def search_roots(preferred_root: str | Path) -> List[Path]:
+    root = Path(preferred_root).expanduser()
+    home = Path.home()
+    candidates = [
+        root,
+        APP_DIR,
+        Path.cwd(),
+        root.parent,
+        APP_DIR.parent,
+        Path.cwd().parent,
+        home / "Desktop",
+        home / "Documents",
+        home / "Downloads",
+    ]
+    return unique_existing_paths(candidates)
+
+
+def safe_rglob(root: Path, pattern: str):
+    try:
+        yield from root.rglob(pattern)
+    except (OSError, PermissionError):
+        return
+
+
+def find_named_dir(names: Iterable[str], preferred_root: str | Path) -> Optional[Path]:
+    name_set = set(names)
+    for root in search_roots(preferred_root):
+        for name in name_set:
+            direct = root / name
+            if direct.is_dir():
+                return direct
+        for path in safe_rglob(root, "*"):
+            if path.is_dir() and path.name in name_set:
+                return path
+    return None
+
+
+def find_named_file(name: str, preferred_root: str | Path, *, relative: Optional[Path] = None) -> Path:
+    for root in search_roots(preferred_root):
+        if relative is not None:
+            direct_relative = root / relative
+            if direct_relative.is_file():
+                return direct_relative
+        direct = root / name
+        if direct.is_file():
+            return direct
+        for path in safe_rglob(root, name):
+            if path.is_file():
+                return path
+    fallback_root = Path(preferred_root).expanduser().resolve()
+    return fallback_root / (relative or Path(name))
+
+
 def locate_project_root(project_root: str | Path) -> Path:
     root = Path(project_root).expanduser().resolve()
     if any((root / name).exists() for name in ALL_FOLDER_ALIASES) or (
@@ -58,25 +131,50 @@ def locate_project_root(project_root: str | Path) -> Path:
     ):
         return root
 
-    for x_dir in root.rglob(X_FOLDER_NAME):
-        candidate = x_dir.parent
-        if (candidate / W_FOLDER_NAME).exists():
-            return candidate
-    for name in ALL_FOLDER_ALIASES:
-        for all_dir in root.rglob(name):
-            return all_dir.parent
+    for search_root in search_roots(root):
+        for x_dir in safe_rglob(search_root, X_FOLDER_NAME):
+            if not x_dir.is_dir():
+                continue
+            candidate = x_dir.parent
+            if (candidate / W_FOLDER_NAME).exists():
+                return candidate
+    all_dir = find_named_dir(ALL_FOLDER_ALIASES, root)
+    if all_dir:
+        return all_dir.parent
 
     return root
 
 
+def locate_all_dir(project_root: Path) -> Path:
+    for name in ALL_FOLDER_ALIASES:
+        direct = project_root / name
+        if direct.exists():
+            return direct
+    found = find_named_dir(ALL_FOLDER_ALIASES, project_root)
+    if found:
+        return found
+    return project_root / ALL_FOLDER_NAME
+
+
+def locate_representative_dirs(project_root: Path) -> Tuple[Path, Path]:
+    x_dir = project_root / X_FOLDER_NAME
+    w_dir = project_root / W_FOLDER_NAME
+    if x_dir.exists() and w_dir.exists():
+        return x_dir, w_dir
+    found_x = find_named_dir([X_FOLDER_NAME], project_root)
+    found_w = find_named_dir([W_FOLDER_NAME], project_root)
+    return found_x or x_dir, found_w or w_dir
+
+
 def configure_project_root(project_root: str | Path) -> None:
-    global PROJECT_ROOT, X_DIR, W_DIR, ALL_DIR, SURVIVOR_CSV, PROMOTION_TABLE, _SURVIVOR_CACHE, _PROMOTION_ORBIT_CACHE, _PROMOTION_REP_CACHE, _ACTUAL_SURVIVOR_CACHE, _GRAPH_DIR_CACHE, _FORK_CACHE, _PROMOTED_WORD_CACHE
+    global PROJECT_ROOT, X_DIR, W_DIR, ALL_DIR, SURVIVOR_CSV, PROMOTION_TABLE, IMAGE_EXPLORER_HTML, REP_IMAGE_DIR, _SURVIVOR_CACHE, _PROMOTION_ORBIT_CACHE, _PROMOTION_REP_CACHE, _ACTUAL_SURVIVOR_CACHE, _GRAPH_DIR_CACHE, _FORK_CACHE, _PROMOTED_WORD_CACHE
     PROJECT_ROOT = locate_project_root(project_root)
-    X_DIR = PROJECT_ROOT / X_FOLDER_NAME
-    W_DIR = PROJECT_ROOT / W_FOLDER_NAME
-    ALL_DIR = next((PROJECT_ROOT / name for name in ALL_FOLDER_ALIASES if (PROJECT_ROOT / name).exists()), PROJECT_ROOT / ALL_FOLDER_NAME)
-    SURVIVOR_CSV = PROJECT_ROOT / SURVIVOR_CSV_NAME
-    PROMOTION_TABLE = PROJECT_ROOT / PROMOTION_TABLE_PATH
+    X_DIR, W_DIR = locate_representative_dirs(PROJECT_ROOT)
+    ALL_DIR = locate_all_dir(PROJECT_ROOT)
+    SURVIVOR_CSV = find_named_file(SURVIVOR_CSV_NAME, PROJECT_ROOT)
+    PROMOTION_TABLE = find_named_file("promotion_orbits_4x4.tsv", PROJECT_ROOT, relative=PROMOTION_TABLE_PATH)
+    IMAGE_EXPLORER_HTML = find_named_file(IMAGE_EXPLORER_HTML_NAME, PROJECT_ROOT)
+    REP_IMAGE_DIR = find_named_dir([REP_IMAGE_FOLDER_NAME], PROJECT_ROOT) or (PROJECT_ROOT / REP_IMAGE_FOLDER_NAME)
     _SURVIVOR_CACHE = None
     _PROMOTION_ORBIT_CACHE = None
     _PROMOTION_REP_CACHE = None
@@ -627,6 +725,35 @@ def warm_lookup_caches() -> None:
             graph_dir_index(ALL_DIR)
     except Exception as exc:  # noqa: BLE001 - cache warming should not prevent the app from starting.
         print(f"[wrench-web] cache warming skipped: {exc}")
+
+
+def image_explorer_page() -> str:
+    if not IMAGE_EXPLORER_HTML.exists():
+        return page_shell(
+            {},
+            f"""
+            <section class="summary">
+              <div>
+                <h2>Image Explorer Missing</h2>
+                <p>Could not find <span class="word">{html.escape(IMAGE_EXPLORER_HTML_NAME)}</span>.</p>
+                <p class="muted">Put it near <span class="word">wrench_web_app.py</span>, or somewhere under Desktop, Documents, or Downloads.</p>
+              </div>
+            </section>
+            """,
+        )
+    text = IMAGE_EXPLORER_HTML.read_text(encoding="utf-8")
+    nav = """
+    <div style="margin:0 0 14px 0;padding:10px 12px;background:#eef5ff;border:1px solid #cbd8ea;border-radius:6px;font-family:Arial,Helvetica,sans-serif;font-size:14px">
+      <a href="/" style="color:#17202a;font-weight:bold;text-decoration:none">Wrench Pairing Explorer</a>
+      <span style="color:#667481;margin:0 8px">|</span>
+      <span style="font-weight:bold">Image Survivor Explorer</span>
+    </div>
+    """
+    if "<body>" in text:
+        text = text.replace("<body>", "<body>\n" + nav, 1)
+    else:
+        text = nav + text
+    return text
 
 
 def resolve_pair(params: Dict[str, str]) -> Tuple[Path, Path, str]:
@@ -1273,6 +1400,7 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
   <header>
     <h1>Wrench Pairing Explorer</h1>
     <p class="muted">Enter W and X directly. They do not need to be transposes of each other.</p>
+    <p class="muted"><a href="/image-explorer">Open image survivor explorer</a></p>
     <form method="get" action="/run">
       <label>W web index, word, or JSON file<input id="w-input" name="w" type="text" value="{w}" placeholder="0447_1231423121323444.json"></label>
       <label>X web index, word, or JSON file<input id="x-input" name="x" type="text" value="{x}" placeholder="0447_1112122334344234.json"></label>
@@ -1372,11 +1500,43 @@ class AppHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def send_file(self, path: Path) -> None:
+        data = path.read_bytes()
+        content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "public, max-age=3600")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def serve_rep_image(self, parsed_path: str) -> bool:
+        prefix = "/" + REP_IMAGE_FOLDER_NAME + "/"
+        if not parsed_path.startswith(prefix):
+            return False
+        rel = urllib.parse.unquote(parsed_path[len(prefix) :])
+        if "/" in rel or rel.startswith("."):
+            return False
+        image_path = (REP_IMAGE_DIR / rel).resolve()
+        try:
+            image_path.relative_to(REP_IMAGE_DIR.resolve())
+        except ValueError:
+            return False
+        if not image_path.exists() or image_path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
+            return False
+        self.send_file(image_path)
+        return True
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
         params = {k: v[-1] for k, v in urllib.parse.parse_qs(parsed.query).items()}
+        if self.serve_rep_image(parsed.path):
+            return
         if parsed.path == "/":
             self.send_html(page_shell(params))
+            return
+        if parsed.path in {"/image-explorer", "/images", "/web-explorer"}:
+            self.send_html(image_explorer_page())
             return
         if parsed.path == "/run":
             try:
