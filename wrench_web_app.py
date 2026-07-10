@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import ast
+import csv
 import html
 import json
 import math
@@ -20,10 +22,17 @@ APP_DIR = Path(__file__).resolve().parent
 X_FOLDER_NAME = "hourglass_disk_4x4_promotion_reps_graph_data"
 W_FOLDER_NAME = "hourglass_disk_4x4_transpose_words_graph_data"
 ALL_FOLDER_NAME = "hourglass_disk_4x4_all_graph_data"
+ALL_FOLDER_ALIASES = (ALL_FOLDER_NAME, "4x4_All_graph_data")
+SURVIVOR_CSV_NAME = "lemma46_survivors.csv"
+PROMOTION_TABLE_PATH = Path("hourglass_disk_4x4_promotion_reps") / "promotion_orbits_4x4.tsv"
 PROJECT_ROOT = Path(os.environ.get("PROBLEM3_ROOT", APP_DIR)).expanduser().resolve()
 X_DIR = PROJECT_ROOT / X_FOLDER_NAME
 W_DIR = PROJECT_ROOT / W_FOLDER_NAME
 ALL_DIR = PROJECT_ROOT / ALL_FOLDER_NAME
+SURVIVOR_CSV = PROJECT_ROOT / SURVIVOR_CSV_NAME
+PROMOTION_TABLE = PROJECT_ROOT / PROMOTION_TABLE_PATH
+_SURVIVOR_CACHE: Optional[Tuple[float, Dict[str, Any]]] = None
+_PROMOTION_ORBIT_CACHE: Optional[Dict[int, List[str]]] = None
 
 DEFAULT_X = "0447_1112122334344234.json"
 DEFAULT_W = "0447_1231423121323444.json"
@@ -39,25 +48,32 @@ COLORS = {
 
 def locate_project_root(project_root: str | Path) -> Path:
     root = Path(project_root).expanduser().resolve()
-    if (root / ALL_FOLDER_NAME).exists() or ((root / X_FOLDER_NAME).exists() and (root / W_FOLDER_NAME).exists()):
+    if any((root / name).exists() for name in ALL_FOLDER_ALIASES) or (
+        (root / X_FOLDER_NAME).exists() and (root / W_FOLDER_NAME).exists()
+    ):
         return root
 
     for x_dir in root.rglob(X_FOLDER_NAME):
         candidate = x_dir.parent
         if (candidate / W_FOLDER_NAME).exists():
             return candidate
-    for all_dir in root.rglob(ALL_FOLDER_NAME):
-        return all_dir.parent
+    for name in ALL_FOLDER_ALIASES:
+        for all_dir in root.rglob(name):
+            return all_dir.parent
 
     return root
 
 
 def configure_project_root(project_root: str | Path) -> None:
-    global PROJECT_ROOT, X_DIR, W_DIR, ALL_DIR
+    global PROJECT_ROOT, X_DIR, W_DIR, ALL_DIR, SURVIVOR_CSV, PROMOTION_TABLE, _SURVIVOR_CACHE, _PROMOTION_ORBIT_CACHE
     PROJECT_ROOT = locate_project_root(project_root)
     X_DIR = PROJECT_ROOT / X_FOLDER_NAME
     W_DIR = PROJECT_ROOT / W_FOLDER_NAME
-    ALL_DIR = PROJECT_ROOT / ALL_FOLDER_NAME
+    ALL_DIR = next((PROJECT_ROOT / name for name in ALL_FOLDER_ALIASES if (PROJECT_ROOT / name).exists()), PROJECT_ROOT / ALL_FOLDER_NAME)
+    SURVIVOR_CSV = PROJECT_ROOT / SURVIVOR_CSV_NAME
+    PROMOTION_TABLE = PROJECT_ROOT / PROMOTION_TABLE_PATH
+    _SURVIVOR_CACHE = None
+    _PROMOTION_ORBIT_CACHE = None
 
 
 def load_json(path: Path) -> Dict[str, Any]:
@@ -85,7 +101,7 @@ def resolve_graph(value: str, side: str, *, prefer_all: bool = True) -> Path:
     if not any(path.exists() for path in search_dirs):
         raise FileNotFoundError(
             f"Could not find graph-data folders under {PROJECT_ROOT}. "
-            f"Expected {ALL_FOLDER_NAME}, or the representative folders. "
+            f"Expected {ALL_FOLDER_NAME} / 4x4_All_graph_data, or the representative folders. "
             "Put the JSON folders next to wrench_web_app.py, or start the app with "
             "--project-root /path/to/the/folder-that-contains-the-json-folders."
         )
@@ -131,6 +147,165 @@ def graph_word(path: Path) -> str:
     return str(data.get("metadata", {}).get("word", stem))
 
 
+def promotion_orbit_words_by_index() -> Dict[int, List[str]]:
+    """Return promotion orbit words keyed by the 1-based orbit index in the survivor CSV."""
+    global _PROMOTION_ORBIT_CACHE
+    if _PROMOTION_ORBIT_CACHE is not None:
+        return _PROMOTION_ORBIT_CACHE
+
+    orbits: Dict[int, List[str]] = {}
+    if PROMOTION_TABLE.exists():
+        with PROMOTION_TABLE.open(newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f, delimiter="\t")
+            for row in reader:
+                idx = int(row.get("orbit_index") or row["index"])
+                words = [w.strip() for w in row["orbit_words"].split(",") if w.strip()]
+                orbits[idx] = words
+    _PROMOTION_ORBIT_CACHE = orbits
+    return orbits
+
+
+def parse_survivor_words(row: Dict[str, str]) -> List[str]:
+    raw_words = row.get("survivor_words", "").strip()
+    if raw_words:
+        try:
+            return [str(word) for word in ast.literal_eval(raw_words)]
+        except (SyntaxError, ValueError):
+            return []
+
+    raw_pairs = row.get("survivor_pairs", "").strip()
+    if not raw_pairs:
+        return []
+    orbits = promotion_orbit_words_by_index()
+    if not orbits:
+        return []
+
+    words = []
+    try:
+        pairs = ast.literal_eval(raw_pairs)
+    except (SyntaxError, ValueError):
+        return []
+    for orbit_idx, position in pairs:
+        orbit_words = orbits.get(int(orbit_idx), [])
+        if not orbit_words:
+            continue
+        pos = int(position)
+        if 0 <= pos < len(orbit_words):
+            words.append(orbit_words[pos])
+        else:
+            words.append(orbit_words[pos % len(orbit_words)])
+    return words
+
+
+def load_survivor_index() -> Dict[str, Any]:
+    global _SURVIVOR_CACHE
+    if not SURVIVOR_CSV.exists():
+        return {"by_idx": {}, "by_word": {}, "mtime": None}
+
+    mtime = SURVIVOR_CSV.stat().st_mtime
+    if _SURVIVOR_CACHE is not None and _SURVIVOR_CACHE[0] == mtime:
+        return _SURVIVOR_CACHE[1]
+
+    by_idx: Dict[int, Dict[str, Any]] = {}
+    by_word: Dict[str, Dict[str, Any]] = {}
+    with SURVIVOR_CSV.open(newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if not row.get("w_idx") or not row.get("w_word"):
+                continue
+            entry = {
+                "w_idx": int(row["w_idx"]),
+                "w_word": row["w_word"].strip(),
+                "n_survivor_pairs": int(row.get("n_survivor_pairs") or 0),
+                "n_survivor_orbits": int(row.get("n_survivor_orbits") or 0),
+                "forks_W": row.get("forks_W", ""),
+                "survivor_words": parse_survivor_words(row),
+            }
+            by_idx[entry["w_idx"]] = entry
+            by_word[entry["w_word"]] = entry
+
+    data = {"by_idx": by_idx, "by_word": by_word, "mtime": mtime}
+    _SURVIVOR_CACHE = (mtime, data)
+    return data
+
+
+def survivor_entry_for_w(value: str) -> Optional[Dict[str, Any]]:
+    value = value.strip()
+    survivors = load_survivor_index()
+    if not value:
+        value = DEFAULT_W
+    if value.isdigit():
+        entry = survivors["by_idx"].get(int(value))
+        if entry:
+            return entry
+    if value in survivors["by_word"]:
+        return survivors["by_word"][value]
+
+    try:
+        path = resolve_graph(value, "W")
+    except Exception:  # noqa: BLE001 - form hints should not break the page.
+        return None
+    word = graph_word(path)
+    return survivors["by_word"].get(word) or survivors["by_idx"].get(graph_index(path))
+
+
+def selected_survivor_for_params(params: Dict[str, str]) -> str:
+    value = params.get("survivor_x", "").strip()
+    if not value:
+        return ""
+    entry = survivor_entry_for_w(params.get("w", ""))
+    if entry and value in set(entry.get("survivor_words", [])):
+        return value
+    return ""
+
+
+def survivor_selector_html(params: Dict[str, str]) -> str:
+    entry = survivor_entry_for_w(params.get("w", ""))
+    if not entry:
+        return ""
+
+    survivor_words = entry.get("survivor_words", [])
+    if not survivor_words:
+        return f"""
+        <details class="survivor-panel" open>
+          <summary>Lemma 4.6 survivors for W = {html.escape(entry['w_word'])}</summary>
+          <p class="muted">This W has survivor data in {html.escape(SURVIVOR_CSV_NAME)}, but this copy of the project does not contain the orbit table needed to expand the survivor-pair list into words.</p>
+        </details>
+        """
+
+    selected = selected_survivor_for_params(params)
+    options = [
+        '<option value="">Choose a survivor X word</option>',
+    ]
+    for idx, word in enumerate(survivor_words, start=1):
+        choice = " selected" if word == selected else ""
+        options.append(f'<option value="{html.escape(word)}"{choice}>{idx:04d} {html.escape(word)}</option>')
+
+    selected_note = (
+        f'<p class="muted">Selected survivor overrides the X field: <span class="word">{html.escape(selected)}</span></p>'
+        if selected
+        else '<p class="muted">Choose one survivor, then run proof search. The selected survivor will be used as X.</p>'
+    )
+    return f"""
+    <details class="survivor-panel" open>
+      <summary>Lemma 4.6 survivors for W = {html.escape(entry['w_word'])}</summary>
+      <div class="survivor-grid">
+        <label>Survivor X word
+          <select name="survivor_x">
+            {''.join(options)}
+          </select>
+        </label>
+        <div class="survivor-meta">
+          <p><strong>{len(survivor_words)}</strong> selectable survivors</p>
+          <p><strong>{entry['n_survivor_pairs']}</strong> survivor pairs, <strong>{entry['n_survivor_orbits']}</strong> survivor orbits</p>
+          <p><strong>Forks of W:</strong> {html.escape(entry.get('forks_W', ''))}</p>
+          {selected_note}
+        </div>
+      </div>
+    </details>
+    """
+
+
 def resolve_transpose_for_original(x_path: Path) -> Path:
     idx = graph_index(x_path)
     matches = sorted(W_DIR.glob(f"{idx:04d}_*.json"))
@@ -147,7 +322,8 @@ def resolve_pair(params: Dict[str, str]) -> Tuple[Path, Path, str]:
     """
     use_transpose = params.get("use_transpose") == "1"
     w_value = params.get("w", "").strip()
-    x_value = params.get("x", "").strip()
+    survivor_value = selected_survivor_for_params(params)
+    x_value = survivor_value or params.get("x", "").strip()
     has_both_manual_inputs = bool(w_value and x_value)
     if (use_transpose and not has_both_manual_inputs) or (
         not has_both_manual_inputs and "rep" in params and not (w_value or x_value)
@@ -159,7 +335,8 @@ def resolve_pair(params: Dict[str, str]) -> Tuple[Path, Path, str]:
 
     w_path = resolve_graph(w_value or DEFAULT_W, "W")
     x_path = resolve_graph(x_value or DEFAULT_X, "X")
-    return x_path, w_path, "manual"
+    mode = "lemma46_survivor" if survivor_value else "manual"
+    return x_path, w_path, mode
 
 
 def node_maps(graph: Dict[str, Any]):
@@ -689,6 +866,7 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
     show_steps = "checked" if params.get("show_steps") == "1" else ""
     has_visible_manual_pair = bool(params.get("w", "").strip() and params.get("x", "").strip())
     use_transpose = "checked" if params.get("use_transpose") == "1" and not has_visible_manual_pair else ""
+    survivor_menu = survivor_selector_html(params)
     return f"""<!doctype html>
 <html>
 <head>
@@ -706,11 +884,15 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
     p {{ margin:6px 0; }}
     form {{ display:grid; grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr) 120px 120px 180px 150px 130px; gap:12px; align-items:end; margin-top:18px; }}
     label {{ display:flex; flex-direction:column; gap:6px; color:var(--muted); font-size:13px; }}
-    input[type=text], input[type=number] {{ padding:10px 11px; border:1px solid var(--line); border-radius:7px; font-size:14px; background:#fff; color:var(--ink); }}
+    input[type=text], input[type=number], select {{ padding:10px 11px; border:1px solid var(--line); border-radius:7px; font-size:14px; background:#fff; color:var(--ink); }}
+    select {{ width:100%; }}
     .check {{ flex-direction:row; align-items:center; gap:9px; padding-bottom:10px; }}
     details {{ grid-column: 1 / -1; border:1px solid var(--line); border-radius:8px; padding:10px 12px; background:#fafbfd; }}
     summary {{ cursor:pointer; color:var(--muted); }}
     .advanced-grid {{ display:grid; grid-template-columns: minmax(260px, 1fr) 210px; gap:12px; margin-top:12px; align-items:end; }}
+    .survivor-panel {{ background:#f8fbff; }}
+    .survivor-grid {{ display:grid; grid-template-columns: minmax(320px, 1fr) minmax(300px, 520px); gap:14px; margin-top:12px; align-items:start; }}
+    .survivor-meta {{ border:1px solid var(--line); border-radius:7px; padding:10px 12px; background:#fff; }}
     button {{ height:40px; border:0; border-radius:7px; background:var(--ink); color:#fff; font-size:14px; cursor:pointer; }}
     main {{ padding:24px 34px 50px; }}
     .summary, .toc, .step {{ background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:18px; margin-bottom:18px; }}
@@ -751,6 +933,7 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
       <label class="check"><input type="checkbox" name="allow_w" value="1" {allow_w}> allow wrench moves on W</label>
       <label class="check"><input type="checkbox" name="show_steps" value="1" {show_steps}> show full step pictures</label>
       <button type="submit">Run proof search</button>
+      {survivor_menu}
       <details>
         <summary>Shortcut: use a representative and its transpose instead</summary>
         <div class="advanced-grid">
