@@ -33,6 +33,7 @@ SURVIVOR_CSV = PROJECT_ROOT / SURVIVOR_CSV_NAME
 PROMOTION_TABLE = PROJECT_ROOT / PROMOTION_TABLE_PATH
 _SURVIVOR_CACHE: Optional[Tuple[float, Dict[str, Any]]] = None
 _PROMOTION_ORBIT_CACHE: Optional[Dict[int, List[str]]] = None
+_ACTUAL_SURVIVOR_CACHE: Dict[Tuple[str, float], Dict[str, Any]] = {}
 
 DEFAULT_X = "0447_1112122334344234.json"
 DEFAULT_W = "0447_1231423121323444.json"
@@ -65,7 +66,7 @@ def locate_project_root(project_root: str | Path) -> Path:
 
 
 def configure_project_root(project_root: str | Path) -> None:
-    global PROJECT_ROOT, X_DIR, W_DIR, ALL_DIR, SURVIVOR_CSV, PROMOTION_TABLE, _SURVIVOR_CACHE, _PROMOTION_ORBIT_CACHE
+    global PROJECT_ROOT, X_DIR, W_DIR, ALL_DIR, SURVIVOR_CSV, PROMOTION_TABLE, _SURVIVOR_CACHE, _PROMOTION_ORBIT_CACHE, _ACTUAL_SURVIVOR_CACHE
     PROJECT_ROOT = locate_project_root(project_root)
     X_DIR = PROJECT_ROOT / X_FOLDER_NAME
     W_DIR = PROJECT_ROOT / W_FOLDER_NAME
@@ -74,6 +75,7 @@ def configure_project_root(project_root: str | Path) -> None:
     PROMOTION_TABLE = PROJECT_ROOT / PROMOTION_TABLE_PATH
     _SURVIVOR_CACHE = None
     _PROMOTION_ORBIT_CACHE = None
+    _ACTUAL_SURVIVOR_CACHE = {}
 
 
 def load_json(path: Path) -> Dict[str, Any]:
@@ -261,9 +263,63 @@ def selected_survivor_for_params(params: Dict[str, str]) -> str:
     if not value:
         return ""
     entry = survivor_entry_for_w(params.get("w", ""))
-    if entry and value in set(entry.get("survivor_words", [])):
+    if entry and value in set(actual_survivor_words(entry)["words"]):
         return value
     return ""
+
+
+def actual_survivor_words(entry: Dict[str, Any]) -> Dict[str, Any]:
+    """Filter CSV survivors by the same immediate fork test used by proof search."""
+    mtime = load_survivor_index().get("mtime") or 0.0
+    key = (entry["w_word"], float(mtime))
+    cached = _ACTUAL_SURVIVOR_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    csv_words = list(entry.get("survivor_words", []))
+    result = {
+        "words": [],
+        "csv_count": len(csv_words),
+        "removed_count": 0,
+        "unresolved_count": 0,
+    }
+    if not csv_words:
+        _ACTUAL_SURVIVOR_CACHE[key] = result
+        return result
+
+    try:
+        w_path = resolve_graph(entry["w_word"], "W")
+        w_adj, w_bounds, _ = wrench.parse_web(w_path)
+    except Exception:  # noqa: BLE001 - keep the menu usable if validation cannot run.
+        result["words"] = csv_words
+        result["unresolved_count"] = len(csv_words)
+        _ACTUAL_SURVIVOR_CACHE[key] = result
+        return result
+
+    actual_words = []
+    removed = 0
+    unresolved = 0
+    for word in csv_words:
+        try:
+            x_path = resolve_graph(word, "X")
+            x_adj, x_bounds, _ = wrench.parse_web(x_path)
+        except Exception:  # noqa: BLE001 - skip only the validation for this candidate.
+            unresolved += 1
+            actual_words.append(word)
+            continue
+        if wrench.common_pair_forks(w_adj, w_bounds, x_adj, x_bounds):
+            removed += 1
+        else:
+            actual_words.append(word)
+
+    result = {
+        "words": actual_words,
+        "csv_count": len(csv_words),
+        "removed_count": removed,
+        "unresolved_count": unresolved,
+    }
+    _ACTUAL_SURVIVOR_CACHE[key] = result
+    return result
 
 
 def survivor_selector_html(params: Dict[str, str]) -> str:
@@ -271,12 +327,13 @@ def survivor_selector_html(params: Dict[str, str]) -> str:
     if not entry:
         return ""
 
-    survivor_words = entry.get("survivor_words", [])
+    survivor_info = actual_survivor_words(entry)
+    survivor_words = survivor_info["words"]
     if not survivor_words:
         return f"""
         <details class="survivor-panel" open>
           <summary>Lemma 4.6 survivors for W = {html.escape(entry['w_word'])}</summary>
-          <p class="muted">This W has survivor data in {html.escape(SURVIVOR_CSV_NAME)}, but this copy of the project does not contain the orbit table needed to expand the survivor-pair list into words.</p>
+          <p class="muted">The CSV lists {survivor_info['csv_count']} candidate survivors for this W, but none survive the app's immediate common-fork test.</p>
         </details>
         """
 
@@ -304,7 +361,8 @@ def survivor_selector_html(params: Dict[str, str]) -> str:
         </label>
         <div class="survivor-meta">
           <p><strong>{len(survivor_words)}</strong> selectable survivors</p>
-          <p><strong>{entry['n_survivor_pairs']}</strong> survivor pairs, <strong>{entry['n_survivor_orbits']}</strong> survivor orbits</p>
+          <p><strong>{entry['n_survivor_pairs']}</strong> CSV survivor pairs, <strong>{entry['n_survivor_orbits']}</strong> CSV survivor orbits</p>
+          <p><strong>{survivor_info['removed_count']}</strong> CSV candidates removed by immediate common-fork check</p>
           <p><strong>Forks of W:</strong> {html.escape(entry.get('forks_W', ''))}</p>
           {selected_note}
         </div>
@@ -329,8 +387,15 @@ def resolve_pair(params: Dict[str, str]) -> Tuple[Path, Path, str]:
     """
     use_transpose = params.get("use_transpose") == "1"
     w_value = params.get("w", "").strip()
+    raw_survivor_value = params.get("survivor_x", "").strip()
     survivor_value = selected_survivor_for_params(params)
     x_value = survivor_value or params.get("x", "").strip()
+    if raw_survivor_value and not survivor_value and x_value == raw_survivor_value:
+        raise ValueError(
+            "The selected Lemma 4.6 survivor is no longer selectable because it is "
+            "immediately killed by the common-fork test. Pick another survivor from "
+            "the refreshed menu."
+        )
     has_both_manual_inputs = bool(w_value and x_value)
     if (use_transpose and not has_both_manual_inputs) or (
         not has_both_manual_inputs and "rep" in params and not (w_value or x_value)
@@ -864,7 +929,11 @@ def render_coloring_section(
 
 def page_shell(params: Dict[str, str], body: str = "") -> str:
     rep = html.escape(params.get("rep", DEFAULT_REP))
-    x = html.escape(params.get("x", DEFAULT_X))
+    raw_x = params.get("x", DEFAULT_X)
+    raw_selected_survivor = params.get("survivor_x", "").strip()
+    if raw_selected_survivor and raw_x.strip() == raw_selected_survivor and not selected_survivor_for_params(params):
+        raw_x = ""
+    x = html.escape(raw_x)
     w = html.escape(params.get("w", DEFAULT_W))
     raw_max_steps = params.get("max_steps", "")
     max_steps = "" if raw_max_steps in {"8", "auto"} else html.escape(raw_max_steps)
@@ -970,10 +1039,12 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
       survivorSelect.addEventListener('change', () => {{
         if (survivorSelect.value) {{
           xInput.value = survivorSelect.value;
+          xInput.dataset.fromSurvivor = '1';
         }}
       }});
       if (survivorSelect.value) {{
         xInput.value = survivorSelect.value;
+        xInput.dataset.fromSurvivor = '1';
       }}
     }}
 
@@ -982,6 +1053,10 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
         return;
       }}
       const w = wInput.value.trim();
+      if (xInput && xInput.dataset.fromSurvivor === '1') {{
+        xInput.value = '';
+        xInput.dataset.fromSurvivor = '';
+      }}
       survivorSlot.innerHTML = '';
       if (!w) {{
         return;
