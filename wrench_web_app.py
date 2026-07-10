@@ -250,10 +250,10 @@ def survivor_entry_for_w(value: str) -> Optional[Dict[str, Any]]:
     if entry:
         return entry
 
-    # Numeric manual inputs refer to the all-graph JSON index when that folder
-    # is present. Only fall back to CSV row index if graph resolution did not
-    # identify a survivor row for the resolved word.
-    if value.isdigit() and not ALL_DIR.exists():
+    # If a numeric all-graph index is not one of the CSV W words, treat the
+    # number as a Lemma 4.6 CSV row index. The menu also submits survivor_w so
+    # proof search uses this CSV word rather than the all-graph numeric index.
+    if value.isdigit():
         return survivors["by_idx"].get(int(value))
     return None
 
@@ -262,7 +262,7 @@ def selected_survivor_for_params(params: Dict[str, str]) -> str:
     value = params.get("survivor_x", "").strip()
     if not value:
         return ""
-    entry = survivor_entry_for_w(params.get("w", ""))
+    entry = survivor_entry_for_w(params.get("survivor_w", "").strip() or params.get("w", ""))
     if entry and value in set(actual_survivor_words(entry)["words"]):
         return value
     return ""
@@ -353,6 +353,7 @@ def survivor_selector_html(params: Dict[str, str]) -> str:
     return f"""
     <details class="survivor-panel" open>
       <summary>Lemma 4.6 survivors for W = {html.escape(entry['w_word'])}</summary>
+      <input type="hidden" name="survivor_w" id="survivor-w-word" value="{html.escape(entry['w_word'])}">
       <div class="survivor-grid">
         <label>Survivor X word
           <select name="survivor_x" id="survivor-x-select">
@@ -387,6 +388,7 @@ def resolve_pair(params: Dict[str, str]) -> Tuple[Path, Path, str]:
     """
     use_transpose = params.get("use_transpose") == "1"
     w_value = params.get("w", "").strip()
+    survivor_w_value = params.get("survivor_w", "").strip()
     raw_survivor_value = params.get("survivor_x", "").strip()
     survivor_value = selected_survivor_for_params(params)
     x_value = survivor_value or params.get("x", "").strip()
@@ -396,6 +398,8 @@ def resolve_pair(params: Dict[str, str]) -> Tuple[Path, Path, str]:
             "immediately killed by the common-fork test. Pick another survivor from "
             "the refreshed menu."
         )
+    if survivor_value and survivor_w_value:
+        w_value = survivor_w_value
     has_both_manual_inputs = bool(w_value and x_value)
     if (use_transpose and not has_both_manual_inputs) or (
         not has_both_manual_inputs and "rep" in params and not (w_value or x_value)
@@ -934,7 +938,8 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
     if raw_selected_survivor and raw_x.strip() == raw_selected_survivor and not selected_survivor_for_params(params):
         raw_x = ""
     x = html.escape(raw_x)
-    w = html.escape(params.get("w", DEFAULT_W))
+    raw_w = params.get("survivor_w", "").strip() or params.get("w", DEFAULT_W)
+    w = html.escape(raw_w)
     raw_max_steps = params.get("max_steps", "")
     max_steps = "" if raw_max_steps in {"8", "auto"} else html.escape(raw_max_steps)
     beam = html.escape(params.get("beam_width", "120"))
@@ -1033,6 +1038,10 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
 
     function bindSurvivorSelect() {{
       const survivorSelect = document.getElementById('survivor-x-select');
+      const survivorW = document.getElementById('survivor-w-word');
+      if (survivorW && wInput && survivorW.value && wInput.value !== survivorW.value) {{
+        wInput.value = survivorW.value;
+      }}
       if (!survivorSelect || !xInput) {{
         return;
       }}
