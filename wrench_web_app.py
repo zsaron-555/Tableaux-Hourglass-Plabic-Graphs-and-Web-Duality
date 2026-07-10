@@ -19,9 +19,11 @@ import Wrench_or_Skein as wrench
 APP_DIR = Path(__file__).resolve().parent
 X_FOLDER_NAME = "hourglass_disk_4x4_promotion_reps_graph_data"
 W_FOLDER_NAME = "hourglass_disk_4x4_transpose_words_graph_data"
+ALL_FOLDER_NAME = "hourglass_disk_4x4_all_graph_data"
 PROJECT_ROOT = Path(os.environ.get("PROBLEM3_ROOT", APP_DIR)).expanduser().resolve()
 X_DIR = PROJECT_ROOT / X_FOLDER_NAME
 W_DIR = PROJECT_ROOT / W_FOLDER_NAME
+ALL_DIR = PROJECT_ROOT / ALL_FOLDER_NAME
 
 DEFAULT_X = "0447_1112122334344234.json"
 DEFAULT_W = "0447_1231423121323444.json"
@@ -37,29 +39,32 @@ COLORS = {
 
 def locate_project_root(project_root: str | Path) -> Path:
     root = Path(project_root).expanduser().resolve()
-    if (root / X_FOLDER_NAME).exists() and (root / W_FOLDER_NAME).exists():
+    if (root / ALL_FOLDER_NAME).exists() or ((root / X_FOLDER_NAME).exists() and (root / W_FOLDER_NAME).exists()):
         return root
 
     for x_dir in root.rglob(X_FOLDER_NAME):
         candidate = x_dir.parent
         if (candidate / W_FOLDER_NAME).exists():
             return candidate
+    for all_dir in root.rglob(ALL_FOLDER_NAME):
+        return all_dir.parent
 
     return root
 
 
 def configure_project_root(project_root: str | Path) -> None:
-    global PROJECT_ROOT, X_DIR, W_DIR
+    global PROJECT_ROOT, X_DIR, W_DIR, ALL_DIR
     PROJECT_ROOT = locate_project_root(project_root)
     X_DIR = PROJECT_ROOT / X_FOLDER_NAME
     W_DIR = PROJECT_ROOT / W_FOLDER_NAME
+    ALL_DIR = PROJECT_ROOT / ALL_FOLDER_NAME
 
 
 def load_json(path: Path) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def resolve_graph(value: str, side: str) -> Path:
+def resolve_graph(value: str, side: str, *, prefer_all: bool = True) -> Path:
     """Resolve an index, word, filename, or path into a graph JSON path."""
     value = value.strip()
     if not value:
@@ -71,22 +76,28 @@ def resolve_graph(value: str, side: str) -> Path:
 
     preferred_dir = X_DIR if side == "X" else W_DIR
     fallback_dir = W_DIR if side == "X" else X_DIR
-    search_dirs = [preferred_dir]
+    search_dirs = []
+    if prefer_all:
+        search_dirs.append(ALL_DIR)
+    search_dirs.append(preferred_dir)
     if fallback_dir != preferred_dir:
         search_dirs.append(fallback_dir)
-    if not preferred_dir.exists():
+    if not any(path.exists() for path in search_dirs):
         raise FileNotFoundError(
-            f"Could not find the {side} graph-data folder: {preferred_dir}. "
-            "Put the two JSON folders next to wrench_web_app.py, or start the app with "
+            f"Could not find graph-data folders under {PROJECT_ROOT}. "
+            f"Expected {ALL_FOLDER_NAME}, or the representative folders. "
+            "Put the JSON folders next to wrench_web_app.py, or start the app with "
             "--project-root /path/to/the/folder-that-contains-the-json-folders."
         )
 
     for graph_dir in search_dirs:
         if not graph_dir.exists():
             continue
-        if value.isdigit() and len(value) <= 4:
+        if value.isdigit() and len(value) <= 5:
             idx = int(value)
-            matches = sorted(graph_dir.glob(f"{idx:04d}_*.json"))
+            matches = sorted(graph_dir.glob(f"{idx:05d}_*.json"))
+            if not matches:
+                matches = sorted(graph_dir.glob(f"{idx:04d}_*.json"))
             if matches:
                 return matches[0]
 
@@ -135,15 +146,19 @@ def resolve_pair(params: Dict[str, str]) -> Tuple[Path, Path, str]:
     representative-transpose shortcut is still available with use_transpose=1.
     """
     use_transpose = params.get("use_transpose") == "1"
-    has_manual_inputs = bool(params.get("w", "").strip() or params.get("x", "").strip())
-    if use_transpose or (not has_manual_inputs and "rep" in params):
+    w_value = params.get("w", "").strip()
+    x_value = params.get("x", "").strip()
+    has_both_manual_inputs = bool(w_value and x_value)
+    if (use_transpose and not has_both_manual_inputs) or (
+        not has_both_manual_inputs and "rep" in params and not (w_value or x_value)
+    ):
         rep = params.get("rep", DEFAULT_REP)
-        x_path = resolve_graph(rep, "X")
+        x_path = resolve_graph(rep, "X", prefer_all=False)
         w_path = resolve_transpose_for_original(x_path)
         return x_path, w_path, "transpose"
 
-    w_path = resolve_graph(params.get("w", DEFAULT_W), "W")
-    x_path = resolve_graph(params.get("x", DEFAULT_X), "X")
+    w_path = resolve_graph(w_value or DEFAULT_W, "W")
+    x_path = resolve_graph(x_value or DEFAULT_X, "X")
     return x_path, w_path, "manual"
 
 
@@ -672,7 +687,8 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
     beam = html.escape(params.get("beam_width", "120"))
     allow_w = "checked" if params.get("allow_w", "1") == "1" else ""
     show_steps = "checked" if params.get("show_steps") == "1" else ""
-    use_transpose = "checked" if params.get("use_transpose") == "1" else ""
+    has_visible_manual_pair = bool(params.get("w", "").strip() and params.get("x", "").strip())
+    use_transpose = "checked" if params.get("use_transpose") == "1" and not has_visible_manual_pair else ""
     return f"""<!doctype html>
 <html>
 <head>
@@ -739,7 +755,7 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
         <summary>Shortcut: use a representative and its transpose instead</summary>
         <div class="advanced-grid">
           <label>Representative index or word<input name="rep" type="text" value="{rep}" placeholder="447 or 1112122334344234"></label>
-          <label class="check"><input type="checkbox" name="use_transpose" value="1" {use_transpose}> ignore W/X above and use transpose pair</label>
+          <label class="check"><input type="checkbox" name="use_transpose" value="1" {use_transpose}> use transpose pair when W/X are blank</label>
         </div>
       </details>
     </form>

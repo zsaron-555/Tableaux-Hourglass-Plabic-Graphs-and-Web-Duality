@@ -5,6 +5,7 @@ Put these files/folders in the same folder:
 
   wrench_web_app.py
   Wrench_or_Skein.py
+  hourglass_disk_4x4_all_graph_data/
   hourglass_disk_4x4_promotion_reps_graph_data/
   hourglass_disk_4x4_transpose_words_graph_data/
 
@@ -24,8 +25,9 @@ sequence.
 
 The main form asks for W first and X second. They do not need to be transpose
 pairs. You can enter an index, a Yamanouchi word, or a JSON filename for each
-side. There is also a shortcut section if you want to use one representative
-and its transpose automatically.
+side. If hourglass_disk_4x4_all_graph_data/ is present, manual W/X indices use
+the full 24,024-word list. There is also a shortcut section if you want to use
+one 1,522-orbit representative and its transpose automatically.
 
 If the JSON folders are somewhere else, run:
 
