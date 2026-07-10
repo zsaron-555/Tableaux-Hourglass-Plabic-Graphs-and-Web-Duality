@@ -511,9 +511,37 @@ def actual_survivor_words(entry: Dict[str, Any], w_value: str = "") -> Dict[str,
 
 def survivor_selector_html(params: Dict[str, str]) -> str:
     entered_w = params.get("w", "").strip()
+    if not entered_w:
+        return ""
+    if not SURVIVOR_CSV.exists():
+        return f"""
+        <details class="survivor-panel" open>
+          <summary>Lemma 4.6 survivors unavailable</summary>
+          <p class="muted">Could not find <span class="word">{html.escape(SURVIVOR_CSV_NAME)}</span> under <span class="word">{html.escape(str(PROJECT_ROOT))}</span>.</p>
+          <p class="muted">Put {html.escape(SURVIVOR_CSV_NAME)} in the same folder as wrench_web_app.py, or start the app with --project-root pointing to the folder that contains it.</p>
+        </details>
+        """
+    if not ALL_DIR.exists() and not X_DIR.exists() and not W_DIR.exists():
+        return f"""
+        <details class="survivor-panel" open>
+          <summary>Lemma 4.6 survivors unavailable</summary>
+          <p class="muted">Could not find graph data under <span class="word">{html.escape(str(PROJECT_ROOT))}</span>.</p>
+          <p class="muted">Expected a folder named <span class="word">4x4_All_graph_data</span> or <span class="word">hourglass_disk_4x4_all_graph_data</span>.</p>
+        </details>
+        """
     entry = survivor_entry_for_w(entered_w)
     if not entry:
-        return ""
+        resolved_note = ""
+        try:
+            resolved_note = f"<p class=\"muted\">Entered W resolves to <span class=\"word\">{html.escape(graph_word(resolve_graph(entered_w, 'W')))}</span>, but no Lemma 4.6 survivor row was found for it or its promotion representative.</p>"
+        except Exception as exc:  # noqa: BLE001 - user-facing diagnostic.
+            resolved_note = f"<p class=\"muted\">Could not resolve W input <span class=\"word\">{html.escape(entered_w)}</span>: {html.escape(str(exc))}</p>"
+        return f"""
+        <details class="survivor-panel" open>
+          <summary>No Lemma 4.6 survivor menu for this W</summary>
+          {resolved_note}
+        </details>
+        """
 
     survivor_info = actual_survivor_words(entry, entered_w)
     survivor_words = survivor_info["words"]
