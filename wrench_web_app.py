@@ -709,8 +709,22 @@ def draw_web_svg(
     edge_colors = edge_colors or {}
     node_ring_colors = node_ring_colors or {}
     selected_key = tuple(sorted(selected_hg)) if selected_hg else None
+    selected_wrench_edges: set[Tuple[int, int]] = set()
+    selected_wrench_nodes: set[int] = set()
+    if selected_key:
+        for hg in remaining_hourglasses:
+            w, b = int(hg["white"]), int(hg["black"])
+            if tuple(sorted((w, b))) != selected_key:
+                continue
+            selected_wrench_nodes.update({w, b})
+            for endpoint in (w, b):
+                for neighbor in wrench.neighbor_list(adj.get(endpoint, [])):
+                    selected_wrench_edges.add(tuple(sorted((endpoint, neighbor))))
+                    selected_wrench_nodes.add(neighbor)
 
     highlight_nodes = dict(node_ring_colors)
+    for node in selected_wrench_nodes:
+        highlight_nodes[node] = "#cf2f2f"
     if highlight_fork:
         for label in highlight_fork:
             if label in label_to_node:
@@ -733,8 +747,13 @@ def draw_web_svg(
     for u, v in sorted(edge_set(adj)):
         if u not in xy or v not in xy:
             continue
-        color = edge_colors.get(tuple(sorted((u, v))), "#111")
-        width = 4 if tuple(sorted((u, v))) in edge_colors else 2
+        edge_key = tuple(sorted((u, v)))
+        if edge_key in selected_wrench_edges:
+            color = "#cf2f2f"
+            width = 5
+        else:
+            color = edge_colors.get(edge_key, "#111")
+            width = 4 if edge_key in edge_colors else 2
         out.append(svg_line(transform(*xy[u], size=size), transform(*xy[v], size=size), color, width))
 
     for hg in remaining_hourglasses:
