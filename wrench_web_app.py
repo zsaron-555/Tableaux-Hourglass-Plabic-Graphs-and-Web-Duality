@@ -234,19 +234,26 @@ def survivor_entry_for_w(value: str) -> Optional[Dict[str, Any]]:
     survivors = load_survivor_index()
     if not value:
         value = DEFAULT_W
-    if value.isdigit():
-        entry = survivors["by_idx"].get(int(value))
-        if entry:
-            return entry
     if value in survivors["by_word"]:
         return survivors["by_word"][value]
 
     try:
         path = resolve_graph(value, "W")
     except Exception:  # noqa: BLE001 - form hints should not break the page.
+        if value.isdigit():
+            return survivors["by_idx"].get(int(value))
         return None
     word = graph_word(path)
-    return survivors["by_word"].get(word) or survivors["by_idx"].get(graph_index(path))
+    entry = survivors["by_word"].get(word)
+    if entry:
+        return entry
+
+    # Numeric manual inputs refer to the all-graph JSON index when that folder
+    # is present. Only fall back to CSV row index if graph resolution did not
+    # identify a survivor row for the resolved word.
+    if value.isdigit() and not ALL_DIR.exists():
+        return survivors["by_idx"].get(int(value))
+    return None
 
 
 def selected_survivor_for_params(params: Dict[str, str]) -> str:
