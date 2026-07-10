@@ -33,6 +33,7 @@ SURVIVOR_CSV = PROJECT_ROOT / SURVIVOR_CSV_NAME
 PROMOTION_TABLE = PROJECT_ROOT / PROMOTION_TABLE_PATH
 _SURVIVOR_CACHE: Optional[Tuple[float, Dict[str, Any]]] = None
 _PROMOTION_ORBIT_CACHE: Optional[Dict[int, List[str]]] = None
+_PROMOTION_REP_CACHE: Optional[Dict[str, Tuple[int, str]]] = None
 _ACTUAL_SURVIVOR_CACHE: Dict[Tuple[str, float], Dict[str, Any]] = {}
 
 DEFAULT_X = "0447_1112122334344234.json"
@@ -66,7 +67,7 @@ def locate_project_root(project_root: str | Path) -> Path:
 
 
 def configure_project_root(project_root: str | Path) -> None:
-    global PROJECT_ROOT, X_DIR, W_DIR, ALL_DIR, SURVIVOR_CSV, PROMOTION_TABLE, _SURVIVOR_CACHE, _PROMOTION_ORBIT_CACHE, _ACTUAL_SURVIVOR_CACHE
+    global PROJECT_ROOT, X_DIR, W_DIR, ALL_DIR, SURVIVOR_CSV, PROMOTION_TABLE, _SURVIVOR_CACHE, _PROMOTION_ORBIT_CACHE, _PROMOTION_REP_CACHE, _ACTUAL_SURVIVOR_CACHE
     PROJECT_ROOT = locate_project_root(project_root)
     X_DIR = PROJECT_ROOT / X_FOLDER_NAME
     W_DIR = PROJECT_ROOT / W_FOLDER_NAME
@@ -75,6 +76,7 @@ def configure_project_root(project_root: str | Path) -> None:
     PROMOTION_TABLE = PROJECT_ROOT / PROMOTION_TABLE_PATH
     _SURVIVOR_CACHE = None
     _PROMOTION_ORBIT_CACHE = None
+    _PROMOTION_REP_CACHE = None
     _ACTUAL_SURVIVOR_CACHE = {}
 
 
@@ -163,8 +165,99 @@ def promotion_orbit_words_by_index() -> Dict[int, List[str]]:
                 idx = int(row.get("orbit_index") or row["index"])
                 words = [w.strip() for w in row["orbit_words"].split(",") if w.strip()]
                 orbits[idx] = words
+    else:
+        all_words_path = ALL_DIR / "all_4x4_words.tsv"
+        if all_words_path.exists():
+            all_words = []
+            with all_words_path.open(newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f, delimiter="\t")
+                for row in reader:
+                    word = (row.get("word") or "").strip()
+                    if word:
+                        all_words.append(word)
+            orbits = build_promotion_orbits(all_words)
     _PROMOTION_ORBIT_CACHE = orbits
     return orbits
+
+
+def word_to_tableau(word: str) -> List[List[int]]:
+    rows: List[List[int]] = [[] for _ in range(4)]
+    for number, letter in enumerate(word, start=1):
+        rows[int(letter) - 1].append(number)
+    return rows
+
+
+def tableau_to_word(tableau: List[List[int]]) -> str:
+    n = sum(len(row) for row in tableau)
+    letters = [""] * n
+    for row_index, row in enumerate(tableau, start=1):
+        for entry in row:
+            letters[entry - 1] = str(row_index)
+    return "".join(letters)
+
+
+def promote_word(word: str) -> str:
+    tableau = word_to_tableau(word)
+    n = len(word)
+    row = col = None
+    for r, entries in enumerate(tableau):
+        if 1 in entries:
+            row, col = r, entries.index(1)
+            break
+    if row is None or col is None:
+        raise ValueError(f"Could not find 1 in tableau for word {word}")
+
+    tableau[row][col] = None  # type: ignore[index]
+    while True:
+        candidates = []
+        if col + 1 < len(tableau[row]) and tableau[row][col + 1] is not None:
+            candidates.append((tableau[row][col + 1], row, col + 1))
+        if row + 1 < len(tableau) and col < len(tableau[row + 1]) and tableau[row + 1][col] is not None:
+            candidates.append((tableau[row + 1][col], row + 1, col))
+        if not candidates:
+            break
+        _, next_row, next_col = min(candidates)
+        tableau[row][col] = tableau[next_row][next_col]
+        tableau[next_row][next_col] = None  # type: ignore[index]
+        row, col = next_row, next_col
+
+    tableau[row][col] = n + 1  # type: ignore[index]
+    promoted = [[int(entry) - 1 for entry in entries] for entries in tableau]
+    return tableau_to_word(promoted)
+
+
+def build_promotion_orbits(words: List[str]) -> Dict[int, List[str]]:
+    word_set = set(words)
+    seen = set()
+    reps: List[Tuple[str, List[str]]] = []
+    for word in sorted(word_set):
+        if word in seen:
+            continue
+        orbit = []
+        current = word
+        while current not in orbit:
+            orbit.append(current)
+            seen.add(current)
+            current = promote_word(current)
+            if current not in word_set:
+                raise ValueError(f"Promotion produced word not in all_4x4_words.tsv: {current}")
+        reps.append((min(orbit), orbit))
+    reps.sort(key=lambda item: item[0])
+    return {idx: orbit for idx, (_, orbit) in enumerate(reps, start=1)}
+
+
+def promotion_representative_for_word(word: str) -> Optional[Tuple[int, str]]:
+    global _PROMOTION_REP_CACHE
+    if _PROMOTION_REP_CACHE is None:
+        reps: Dict[str, Tuple[int, str]] = {}
+        for idx, words in promotion_orbit_words_by_index().items():
+            if not words:
+                continue
+            representative = words[0]
+            for orbit_word in words:
+                reps[orbit_word] = (idx, representative)
+        _PROMOTION_REP_CACHE = reps
+    return _PROMOTION_REP_CACHE.get(word)
 
 
 def parse_survivor_words(row: Dict[str, str]) -> List[str]:
@@ -249,10 +342,15 @@ def survivor_entry_for_w(value: str) -> Optional[Dict[str, Any]]:
     entry = survivors["by_word"].get(word)
     if entry:
         return entry
+    rep = promotion_representative_for_word(word)
+    if rep:
+        rep_idx, rep_word = rep
+        return survivors["by_word"].get(rep_word) or survivors["by_idx"].get(rep_idx)
 
-    # If a numeric all-graph index is not one of the CSV W words, treat the
-    # number as a Lemma 4.6 CSV row index. The menu also submits survivor_w so
-    # proof search uses this CSV word rather than the all-graph numeric index.
+    # If the graph folders are not available, allow numeric inputs to mean CSV
+    # row indices. When graph data exists, the numeric value has already been
+    # interpreted as a graph index and, if possible, mapped to its promotion
+    # representative above.
     if value.isdigit():
         return survivors["by_idx"].get(int(value))
     return None
@@ -350,6 +448,12 @@ def survivor_selector_html(params: Dict[str, str]) -> str:
         if selected
         else '<p class="muted">Choose one survivor, then run proof search. The selected survivor will be used as X.</p>'
     )
+    entered_w = params.get("w", "").strip()
+    canonical_note = (
+        f'<p class="muted">Using promotion-orbit representative <span class="word">{html.escape(entry["w_word"])}</span> for the entered W.</p>'
+        if entered_w and entered_w != entry["w_word"]
+        else ""
+    )
     return f"""
     <details class="survivor-panel" open>
       <summary>Lemma 4.6 survivors for W = {html.escape(entry['w_word'])}</summary>
@@ -365,6 +469,7 @@ def survivor_selector_html(params: Dict[str, str]) -> str:
           <p><strong>{entry['n_survivor_pairs']}</strong> CSV survivor pairs, <strong>{entry['n_survivor_orbits']}</strong> CSV survivor orbits</p>
           <p><strong>{survivor_info['removed_count']}</strong> CSV candidates removed by immediate common-fork check</p>
           <p><strong>Forks of W:</strong> {html.escape(entry.get('forks_W', ''))}</p>
+          {canonical_note}
           {selected_note}
         </div>
       </div>
