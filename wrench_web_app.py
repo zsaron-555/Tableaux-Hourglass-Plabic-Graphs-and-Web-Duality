@@ -34,9 +34,10 @@ PROMOTION_TABLE = PROJECT_ROOT / PROMOTION_TABLE_PATH
 _SURVIVOR_CACHE: Optional[Tuple[float, Dict[str, Any]]] = None
 _PROMOTION_ORBIT_CACHE: Optional[Dict[int, List[str]]] = None
 _PROMOTION_REP_CACHE: Optional[Dict[str, Tuple[int, str]]] = None
-_ACTUAL_SURVIVOR_CACHE: Dict[Tuple[str, float], Dict[str, Any]] = {}
+_ACTUAL_SURVIVOR_CACHE: Dict[Tuple[str, str, float], Dict[str, Any]] = {}
 _GRAPH_DIR_CACHE: Dict[Path, Dict[str, Dict[Any, Path]]] = {}
 _FORK_CACHE: Dict[Path, Set[frozenset[int]]] = {}
+_PROMOTED_WORD_CACHE: Dict[Tuple[str, int], str] = {}
 
 DEFAULT_X = "0447_1112122334344234.json"
 DEFAULT_W = "0447_1231423121323444.json"
@@ -69,7 +70,7 @@ def locate_project_root(project_root: str | Path) -> Path:
 
 
 def configure_project_root(project_root: str | Path) -> None:
-    global PROJECT_ROOT, X_DIR, W_DIR, ALL_DIR, SURVIVOR_CSV, PROMOTION_TABLE, _SURVIVOR_CACHE, _PROMOTION_ORBIT_CACHE, _PROMOTION_REP_CACHE, _ACTUAL_SURVIVOR_CACHE, _GRAPH_DIR_CACHE, _FORK_CACHE
+    global PROJECT_ROOT, X_DIR, W_DIR, ALL_DIR, SURVIVOR_CSV, PROMOTION_TABLE, _SURVIVOR_CACHE, _PROMOTION_ORBIT_CACHE, _PROMOTION_REP_CACHE, _ACTUAL_SURVIVOR_CACHE, _GRAPH_DIR_CACHE, _FORK_CACHE, _PROMOTED_WORD_CACHE
     PROJECT_ROOT = locate_project_root(project_root)
     X_DIR = PROJECT_ROOT / X_FOLDER_NAME
     W_DIR = PROJECT_ROOT / W_FOLDER_NAME
@@ -82,6 +83,7 @@ def configure_project_root(project_root: str | Path) -> None:
     _ACTUAL_SURVIVOR_CACHE = {}
     _GRAPH_DIR_CACHE = {}
     _FORK_CACHE = {}
+    _PROMOTED_WORD_CACHE = {}
 
 
 def load_json(path: Path) -> Dict[str, Any]:
@@ -287,6 +289,47 @@ def promotion_representative_for_word(word: str) -> Optional[Tuple[int, str]]:
     return _PROMOTION_REP_CACHE.get(word)
 
 
+def promote_word_steps(word: str, steps: int) -> str:
+    key = (word, steps)
+    cached = _PROMOTED_WORD_CACHE.get(key)
+    if cached is not None:
+        return cached
+    current = word
+    for _ in range(steps):
+        current = promote_word(current)
+    _PROMOTED_WORD_CACHE[key] = current
+    return current
+
+
+def resolved_word(value: str, side: str) -> str:
+    return graph_word(resolve_graph(value, side))
+
+
+def promotion_shift_for_w(entry: Dict[str, Any], w_value: str) -> Tuple[str, int]:
+    """Return the actual W word and its promotion distance from the CSV representative."""
+    try:
+        w_word = resolved_word(w_value or entry["w_word"], "W")
+    except Exception:  # noqa: BLE001
+        return entry["w_word"], 0
+
+    rep = promotion_representative_for_word(w_word)
+    if not rep:
+        return w_word, 0
+    rep_idx, _ = rep
+    orbit = promotion_orbit_words_by_index().get(rep_idx, [])
+    try:
+        return w_word, orbit.index(w_word)
+    except ValueError:
+        return w_word, 0
+
+
+def survivor_words_for_entered_w(entry: Dict[str, Any], w_value: str) -> Tuple[List[str], str, int]:
+    w_word, shift = promotion_shift_for_w(entry, w_value)
+    if shift == 0:
+        return list(entry.get("survivor_words", [])), w_word, shift
+    return [promote_word_steps(word, shift) for word in entry.get("survivor_words", [])], w_word, shift
+
+
 def parse_survivor_words(row: Dict[str, str]) -> List[str]:
     raw_words = row.get("survivor_words", "").strip()
     if raw_words:
@@ -387,8 +430,9 @@ def selected_survivor_for_params(params: Dict[str, str]) -> str:
     value = params.get("survivor_x", "").strip()
     if not value:
         return ""
-    entry = survivor_entry_for_w(params.get("survivor_w", "").strip() or params.get("w", ""))
-    if entry and value in set(actual_survivor_words(entry)["words"]):
+    w_value = params.get("w", "").strip()
+    entry = survivor_entry_for_w(w_value)
+    if entry and value in set(actual_survivor_words(entry, w_value)["words"]):
         return value
     return ""
 
@@ -405,37 +449,42 @@ def forks_for_graph(value: str, side: str) -> Set[frozenset[int]]:
     return forks
 
 
-def actual_survivor_words(entry: Dict[str, Any]) -> Dict[str, Any]:
+def actual_survivor_words(entry: Dict[str, Any], w_value: str = "") -> Dict[str, Any]:
     """Filter CSV survivors by the same immediate fork test used by proof search."""
     mtime = load_survivor_index().get("mtime") or 0.0
-    key = (entry["w_word"], float(mtime))
+    filter_w_value = w_value.strip() or entry["w_word"]
+    csv_words = list(entry.get("survivor_words", []))
+    shifted_words, filter_w_word, promotion_shift = survivor_words_for_entered_w(entry, filter_w_value)
+    key = (entry["w_word"], filter_w_word, float(mtime))
     cached = _ACTUAL_SURVIVOR_CACHE.get(key)
     if cached is not None:
         return cached
 
-    csv_words = list(entry.get("survivor_words", []))
     result = {
         "words": [],
         "csv_count": len(csv_words),
+        "shifted_count": len(shifted_words),
         "removed_count": 0,
         "unresolved_count": 0,
+        "promotion_shift": promotion_shift,
+        "filter_w_word": filter_w_word,
     }
-    if not csv_words:
+    if not shifted_words:
         _ACTUAL_SURVIVOR_CACHE[key] = result
         return result
 
     try:
-        w_forks = forks_for_graph(entry["w_word"], "W")
+        w_forks = forks_for_graph(filter_w_value, "W")
     except Exception:  # noqa: BLE001 - keep the menu usable if validation cannot run.
-        result["words"] = csv_words
-        result["unresolved_count"] = len(csv_words)
+        result["words"] = shifted_words
+        result["unresolved_count"] = len(shifted_words)
         _ACTUAL_SURVIVOR_CACHE[key] = result
         return result
 
     actual_words = []
     removed = 0
     unresolved = 0
-    for word in csv_words:
+    for word in shifted_words:
         try:
             x_forks = forks_for_graph(word, "X")
         except Exception:  # noqa: BLE001 - skip only the validation for this candidate.
@@ -450,19 +499,23 @@ def actual_survivor_words(entry: Dict[str, Any]) -> Dict[str, Any]:
     result = {
         "words": actual_words,
         "csv_count": len(csv_words),
+        "shifted_count": len(shifted_words),
         "removed_count": removed,
         "unresolved_count": unresolved,
+        "promotion_shift": promotion_shift,
+        "filter_w_word": filter_w_word,
     }
     _ACTUAL_SURVIVOR_CACHE[key] = result
     return result
 
 
 def survivor_selector_html(params: Dict[str, str]) -> str:
-    entry = survivor_entry_for_w(params.get("w", ""))
+    entered_w = params.get("w", "").strip()
+    entry = survivor_entry_for_w(entered_w)
     if not entry:
         return ""
 
-    survivor_info = actual_survivor_words(entry)
+    survivor_info = actual_survivor_words(entry, entered_w)
     survivor_words = survivor_info["words"]
     if not survivor_words:
         return f"""
@@ -485,10 +538,24 @@ def survivor_selector_html(params: Dict[str, str]) -> str:
         if selected
         else '<p class="muted">Choose one survivor, then run proof search. The selected survivor will be used as X.</p>'
     )
-    entered_w = params.get("w", "").strip()
+    resolved_w_note = ""
+    if entered_w:
+        try:
+            entered_w_word = graph_word(resolve_graph(entered_w, "W"))
+            if entered_w != entered_w_word:
+                resolved_w_note = (
+                    f'<p class="muted">Entered W resolves to <span class="word">{html.escape(entered_w_word)}</span>.</p>'
+                )
+        except Exception:  # noqa: BLE001 - purely informational.
+            resolved_w_note = ""
     canonical_note = (
-        f'<p class="muted">Using promotion-orbit representative <span class="word">{html.escape(entry["w_word"])}</span> for the entered W.</p>'
+        f'<p class="muted">Survivor list comes from promotion-orbit representative <span class="word">{html.escape(entry["w_word"])}</span>; filtering is done against the entered W.</p>'
         if entered_w and entered_w != entry["w_word"]
+        else ""
+    )
+    shift_note = (
+        f'<p class="muted">Applied promotion shift {survivor_info["promotion_shift"]} to the survivor X words to match the entered W.</p>'
+        if survivor_info.get("promotion_shift", 0)
         else ""
     )
     return f"""
@@ -506,7 +573,9 @@ def survivor_selector_html(params: Dict[str, str]) -> str:
           <p><strong>{entry['n_survivor_pairs']}</strong> CSV survivor pairs, <strong>{entry['n_survivor_orbits']}</strong> CSV survivor orbits</p>
           <p><strong>{survivor_info['removed_count']}</strong> CSV candidates removed by immediate common-fork check</p>
           <p><strong>Forks of W:</strong> {html.escape(entry.get('forks_W', ''))}</p>
+          {resolved_w_note}
           {canonical_note}
+          {shift_note}
           {selected_note}
         </div>
       </div>
@@ -540,7 +609,6 @@ def resolve_pair(params: Dict[str, str]) -> Tuple[Path, Path, str]:
     """
     use_transpose = params.get("use_transpose") == "1"
     w_value = params.get("w", "").strip()
-    survivor_w_value = params.get("survivor_w", "").strip()
     raw_survivor_value = params.get("survivor_x", "").strip()
     survivor_value = selected_survivor_for_params(params)
     x_value = survivor_value or params.get("x", "").strip()
@@ -550,8 +618,6 @@ def resolve_pair(params: Dict[str, str]) -> Tuple[Path, Path, str]:
             "immediately killed by the common-fork test. Pick another survivor from "
             "the refreshed menu."
         )
-    if survivor_value and survivor_w_value:
-        w_value = survivor_w_value
     has_both_manual_inputs = bool(w_value and x_value)
     if (use_transpose and not has_both_manual_inputs) or (
         not has_both_manual_inputs and "rep" in params and not (w_value or x_value)
@@ -1090,7 +1156,7 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
     if raw_selected_survivor and raw_x.strip() == raw_selected_survivor and not selected_survivor_for_params(params):
         raw_x = ""
     x = html.escape(raw_x)
-    raw_w = params.get("survivor_w", "").strip() or params.get("w", DEFAULT_W)
+    raw_w = params.get("w", DEFAULT_W)
     w = html.escape(raw_w)
     raw_max_steps = params.get("max_steps", "")
     max_steps = "" if raw_max_steps in {"8", "auto"} else html.escape(raw_max_steps)
@@ -1190,10 +1256,6 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
 
     function bindSurvivorSelect() {{
       const survivorSelect = document.getElementById('survivor-x-select');
-      const survivorW = document.getElementById('survivor-w-word');
-      if (survivorW && wInput && survivorW.value && wInput.value !== survivorW.value) {{
-        wInput.value = survivorW.value;
-      }}
       if (!survivorSelect || !xInput) {{
         return;
       }}
