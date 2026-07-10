@@ -894,6 +894,8 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
     input[type=text], input[type=number], select {{ padding:10px 11px; border:1px solid var(--line); border-radius:7px; font-size:14px; background:#fff; color:var(--ink); }}
     select {{ width:100%; }}
     .check {{ flex-direction:row; align-items:center; gap:9px; padding-bottom:10px; }}
+    #survivor-menu-slot {{ grid-column: 1 / -1; }}
+    #survivor-menu-slot:empty {{ display:none; }}
     details {{ grid-column: 1 / -1; border:1px solid var(--line); border-radius:8px; padding:10px 12px; background:#fafbfd; }}
     summary {{ cursor:pointer; color:var(--muted); }}
     .advanced-grid {{ display:grid; grid-template-columns: minmax(260px, 1fr) 210px; gap:12px; margin-top:12px; align-items:end; }}
@@ -933,14 +935,16 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
     <h1>Wrench Pairing Explorer</h1>
     <p class="muted">Enter W and X directly. They do not need to be transposes of each other.</p>
     <form method="get" action="/run">
-      <label>W web index, word, or JSON file<input name="w" type="text" value="{w}" placeholder="0447_1231423121323444.json"></label>
+      <label>W web index, word, or JSON file<input id="w-input" name="w" type="text" value="{w}" placeholder="0447_1231423121323444.json"></label>
       <label>X web index, word, or JSON file<input id="x-input" name="x" type="text" value="{x}" placeholder="0447_1112122334344234.json"></label>
       <label>Step cap, optional<input name="max_steps" type="number" value="{max_steps}" min="0" placeholder="auto"></label>
       <label>Beam width<input name="beam_width" type="number" value="{beam}" min="1"></label>
       <label class="check"><input type="checkbox" name="allow_w" value="1" {allow_w}> allow wrench moves on W</label>
       <label class="check"><input type="checkbox" name="show_steps" value="1" {show_steps}> show full step pictures</label>
       <button type="submit">Run proof search</button>
-      {survivor_menu}
+      <div id="survivor-menu-slot">
+        {survivor_menu}
+      </div>
       <details>
         <summary>Shortcut: use a representative and its transpose instead</summary>
         <div class="advanced-grid">
@@ -954,9 +958,15 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
     {body or '<section class="toc"><h2>Ready</h2><p>Enter a W web and an X web above, then run wrench moves and coloring. The two webs do not have to be a transpose pair.</p></section>'}
   </main>
   <script>
-    const survivorSelect = document.getElementById('survivor-x-select');
+    const survivorSlot = document.getElementById('survivor-menu-slot');
+    const wInput = document.getElementById('w-input');
     const xInput = document.getElementById('x-input');
-    if (survivorSelect && xInput) {{
+
+    function bindSurvivorSelect() {{
+      const survivorSelect = document.getElementById('survivor-x-select');
+      if (!survivorSelect || !xInput) {{
+        return;
+      }}
       survivorSelect.addEventListener('change', () => {{
         if (survivorSelect.value) {{
           xInput.value = survivorSelect.value;
@@ -965,6 +975,43 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
       if (survivorSelect.value) {{
         xInput.value = survivorSelect.value;
       }}
+    }}
+
+    async function refreshSurvivorMenu() {{
+      if (!survivorSlot || !wInput) {{
+        return;
+      }}
+      const w = wInput.value.trim();
+      survivorSlot.innerHTML = '';
+      if (!w) {{
+        return;
+      }}
+      try {{
+        const response = await fetch('/survivors?w=' + encodeURIComponent(w), {{cache: 'no-store'}});
+        if (!response.ok) {{
+          return;
+        }}
+        survivorSlot.innerHTML = await response.text();
+        bindSurvivorSelect();
+      }} catch (error) {{
+        console.warn('Could not refresh survivor menu', error);
+      }}
+    }}
+
+    function debounce(fn, delay) {{
+      let timer = null;
+      return () => {{
+        window.clearTimeout(timer);
+        timer = window.setTimeout(fn, delay);
+      }};
+    }}
+
+    bindSurvivorSelect();
+    if (wInput) {{
+      const delayedRefresh = debounce(refreshSurvivorMenu, 350);
+      wInput.addEventListener('input', delayedRefresh);
+      wInput.addEventListener('change', refreshSurvivorMenu);
+      wInput.addEventListener('blur', refreshSurvivorMenu);
     }}
   </script>
 </body>
@@ -995,6 +1042,9 @@ class AppHandler(BaseHTTPRequestHandler):
                     f"<p>{html.escape(str(exc))}</p></div></section>"
                 )
                 self.send_html(page_shell(params, body), status=500)
+            return
+        if parsed.path == "/survivors":
+            self.send_html(survivor_selector_html(params))
             return
         self.send_html(page_shell(params, "<section class='summary'><h2>Not found</h2></section>"), status=404)
 
