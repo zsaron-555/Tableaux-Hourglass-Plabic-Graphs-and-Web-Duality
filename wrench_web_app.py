@@ -298,7 +298,7 @@ def survivor_selector_html(params: Dict[str, str]) -> str:
       <summary>Lemma 4.6 survivors for W = {html.escape(entry['w_word'])}</summary>
       <div class="survivor-grid">
         <label>Survivor X word
-          <select name="survivor_x">
+          <select name="survivor_x" id="survivor-x-select">
             {''.join(options)}
           </select>
         </label>
@@ -934,7 +934,7 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
     <p class="muted">Enter W and X directly. They do not need to be transposes of each other.</p>
     <form method="get" action="/run">
       <label>W web index, word, or JSON file<input name="w" type="text" value="{w}" placeholder="0447_1231423121323444.json"></label>
-      <label>X web index, word, or JSON file<input name="x" type="text" value="{x}" placeholder="0447_1112122334344234.json"></label>
+      <label>X web index, word, or JSON file<input id="x-input" name="x" type="text" value="{x}" placeholder="0447_1112122334344234.json"></label>
       <label>Step cap, optional<input name="max_steps" type="number" value="{max_steps}" min="0" placeholder="auto"></label>
       <label>Beam width<input name="beam_width" type="number" value="{beam}" min="1"></label>
       <label class="check"><input type="checkbox" name="allow_w" value="1" {allow_w}> allow wrench moves on W</label>
@@ -953,6 +953,20 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
   <main>
     {body or '<section class="toc"><h2>Ready</h2><p>Enter a W web and an X web above, then run wrench moves and coloring. The two webs do not have to be a transpose pair.</p></section>'}
   </main>
+  <script>
+    const survivorSelect = document.getElementById('survivor-x-select');
+    const xInput = document.getElementById('x-input');
+    if (survivorSelect && xInput) {{
+      survivorSelect.addEventListener('change', () => {{
+        if (survivorSelect.value) {{
+          xInput.value = survivorSelect.value;
+        }}
+      }});
+      if (survivorSelect.value) {{
+        xInput.value = survivorSelect.value;
+      }}
+    }}
+  </script>
 </body>
 </html>"""
 
