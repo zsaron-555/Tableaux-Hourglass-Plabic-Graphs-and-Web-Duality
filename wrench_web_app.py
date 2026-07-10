@@ -13,7 +13,7 @@ import os
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import Wrench_or_Skein as wrench
 
@@ -35,6 +35,8 @@ _SURVIVOR_CACHE: Optional[Tuple[float, Dict[str, Any]]] = None
 _PROMOTION_ORBIT_CACHE: Optional[Dict[int, List[str]]] = None
 _PROMOTION_REP_CACHE: Optional[Dict[str, Tuple[int, str]]] = None
 _ACTUAL_SURVIVOR_CACHE: Dict[Tuple[str, float], Dict[str, Any]] = {}
+_GRAPH_DIR_CACHE: Dict[Path, Dict[str, Dict[Any, Path]]] = {}
+_FORK_CACHE: Dict[Path, Set[frozenset[int]]] = {}
 
 DEFAULT_X = "0447_1112122334344234.json"
 DEFAULT_W = "0447_1231423121323444.json"
@@ -67,7 +69,7 @@ def locate_project_root(project_root: str | Path) -> Path:
 
 
 def configure_project_root(project_root: str | Path) -> None:
-    global PROJECT_ROOT, X_DIR, W_DIR, ALL_DIR, SURVIVOR_CSV, PROMOTION_TABLE, _SURVIVOR_CACHE, _PROMOTION_ORBIT_CACHE, _PROMOTION_REP_CACHE, _ACTUAL_SURVIVOR_CACHE
+    global PROJECT_ROOT, X_DIR, W_DIR, ALL_DIR, SURVIVOR_CSV, PROMOTION_TABLE, _SURVIVOR_CACHE, _PROMOTION_ORBIT_CACHE, _PROMOTION_REP_CACHE, _ACTUAL_SURVIVOR_CACHE, _GRAPH_DIR_CACHE, _FORK_CACHE
     PROJECT_ROOT = locate_project_root(project_root)
     X_DIR = PROJECT_ROOT / X_FOLDER_NAME
     W_DIR = PROJECT_ROOT / W_FOLDER_NAME
@@ -78,10 +80,36 @@ def configure_project_root(project_root: str | Path) -> None:
     _PROMOTION_ORBIT_CACHE = None
     _PROMOTION_REP_CACHE = None
     _ACTUAL_SURVIVOR_CACHE = {}
+    _GRAPH_DIR_CACHE = {}
+    _FORK_CACHE = {}
 
 
 def load_json(path: Path) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def graph_dir_index(graph_dir: Path) -> Dict[str, Dict[Any, Path]]:
+    graph_dir = graph_dir.resolve()
+    cached = _GRAPH_DIR_CACHE.get(graph_dir)
+    if cached is not None:
+        return cached
+
+    by_index: Dict[int, Path] = {}
+    by_word: Dict[str, Path] = {}
+    by_name: Dict[str, Path] = {}
+    if graph_dir.exists():
+        for path in graph_dir.glob("*.json"):
+            stem = path.stem
+            by_name[path.name] = path
+            if "_" not in stem:
+                continue
+            prefix, word = stem.split("_", 1)
+            by_word[word] = path
+            if prefix.isdigit():
+                by_index[int(prefix)] = path
+    index = {"by_index": by_index, "by_word": by_word, "by_name": by_name}
+    _GRAPH_DIR_CACHE[graph_dir] = index
+    return index
 
 
 def resolve_graph(value: str, side: str, *, prefer_all: bool = True) -> Path:
@@ -113,21 +141,20 @@ def resolve_graph(value: str, side: str, *, prefer_all: bool = True) -> Path:
     for graph_dir in search_dirs:
         if not graph_dir.exists():
             continue
+        index = graph_dir_index(graph_dir)
         if value.isdigit() and len(value) <= 5:
             idx = int(value)
-            matches = sorted(graph_dir.glob(f"{idx:05d}_*.json"))
-            if not matches:
-                matches = sorted(graph_dir.glob(f"{idx:04d}_*.json"))
-            if matches:
-                return matches[0]
+            match = index["by_index"].get(idx)
+            if match:
+                return match
 
         exact = graph_dir / value
         if exact.exists():
             return exact
 
-        matches = sorted(graph_dir.glob(f"*_{value}.json"))
-        if matches:
-            return matches[0]
+        match = index["by_name"].get(value) or index["by_word"].get(value)
+        if match:
+            return match
 
     raise FileNotFoundError(f"Could not find {side} graph for input: {value}")
 
@@ -366,6 +393,18 @@ def selected_survivor_for_params(params: Dict[str, str]) -> str:
     return ""
 
 
+def forks_for_graph(value: str, side: str) -> Set[frozenset[int]]:
+    path = resolve_graph(value, side)
+    cache_key = path.resolve()
+    cached = _FORK_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    adj, boundary_labels, _ = wrench.parse_web(path)
+    forks = wrench.get_forks(adj, boundary_labels)
+    _FORK_CACHE[cache_key] = forks
+    return forks
+
+
 def actual_survivor_words(entry: Dict[str, Any]) -> Dict[str, Any]:
     """Filter CSV survivors by the same immediate fork test used by proof search."""
     mtime = load_survivor_index().get("mtime") or 0.0
@@ -386,8 +425,7 @@ def actual_survivor_words(entry: Dict[str, Any]) -> Dict[str, Any]:
         return result
 
     try:
-        w_path = resolve_graph(entry["w_word"], "W")
-        w_adj, w_bounds, _ = wrench.parse_web(w_path)
+        w_forks = forks_for_graph(entry["w_word"], "W")
     except Exception:  # noqa: BLE001 - keep the menu usable if validation cannot run.
         result["words"] = csv_words
         result["unresolved_count"] = len(csv_words)
@@ -399,13 +437,12 @@ def actual_survivor_words(entry: Dict[str, Any]) -> Dict[str, Any]:
     unresolved = 0
     for word in csv_words:
         try:
-            x_path = resolve_graph(word, "X")
-            x_adj, x_bounds, _ = wrench.parse_web(x_path)
+            x_forks = forks_for_graph(word, "X")
         except Exception:  # noqa: BLE001 - skip only the validation for this candidate.
             unresolved += 1
             actual_words.append(word)
             continue
-        if wrench.common_pair_forks(w_adj, w_bounds, x_adj, x_bounds):
+        if w_forks.intersection(x_forks):
             removed += 1
         else:
             actual_words.append(word)
@@ -483,6 +520,16 @@ def resolve_transpose_for_original(x_path: Path) -> Path:
     if not matches:
         raise FileNotFoundError(f"Could not find transpose graph with representative index {idx:04d}")
     return matches[0]
+
+
+def warm_lookup_caches() -> None:
+    try:
+        load_survivor_index()
+        promotion_orbit_words_by_index()
+        if ALL_DIR.exists():
+            graph_dir_index(ALL_DIR)
+    except Exception as exc:  # noqa: BLE001 - cache warming should not prevent the app from starting.
+        print(f"[wrench-web] cache warming skipped: {exc}")
 
 
 def resolve_pair(params: Dict[str, str]) -> Tuple[Path, Path, str]:
@@ -1257,6 +1304,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     configure_project_root(args.project_root)
+    warm_lookup_caches()
     server = ThreadingHTTPServer((args.host, args.port), AppHandler)
     print(f"Wrench Pairing Explorer running at http://{args.host}:{args.port}/")
     print(f"Using graph data from {PROJECT_ROOT}")
