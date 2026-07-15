@@ -634,6 +634,151 @@ def apply_figure43_move(
     return new_adj, new_hgs
 
 
+ANTISYMMETRIZER_TERMS: List[Tuple[Tuple[int, int, int], int]] = [
+    ((1, 2, 3), -1),
+    ((1, 3, 2), 1),
+    ((2, 1, 3), 1),
+    ((2, 3, 1), -1),
+    ((3, 1, 2), -1),
+    ((3, 2, 1), 1),
+]
+
+
+def _ordered_ports_across_edge(
+    center: int,
+    opposite: int,
+    ports: Iterable[int],
+    node_xy: Optional[NodeXY],
+) -> List[int]:
+    ports = [int(port) for port in ports]
+    if not node_xy or center not in node_xy or opposite not in node_xy:
+        return sorted(ports)
+    cx, cy = node_xy[center]
+    ox, oy = node_xy[opposite]
+    ax, ay = ox - cx, oy - cy
+    norm = math.hypot(ax, ay)
+    if norm == 0:
+        return sorted(ports)
+    perp = (-ay / norm, ax / norm)
+
+    def key(port: int) -> Tuple[float, float, int]:
+        if port not in node_xy:
+            return (0.0, 0.0, port)
+        px, py = node_xy[port]
+        proj = (px - cx) * perp[0] + (py - cy) * perp[1]
+        along = (px - cx) * ax / norm + (py - cy) * ay / norm
+        return (-proj, along, port)
+
+    return sorted(ports, key=key)
+
+
+def _all_antisym_pairings_are_bipartite(
+    input_ports: List[int],
+    output_ports: List[int],
+    node_colors: Optional[NodeColors],
+) -> bool:
+    if not node_colors:
+        return True
+    for left in input_ports:
+        for right in output_ports:
+            if not _colors_are_opposite(node_colors.get(left), node_colors.get(right)):
+                return False
+    return True
+
+
+def detect_antisymmetrizer_moves(
+    adj: Adjacency,
+    node_colors: Optional[NodeColors],
+    node_xy: Optional[NodeXY],
+) -> List[Dict[str, Any]]:
+    """Detect the white-black 4-valent antisymmetrizer relation.
+
+    This is the relation from the supplied JSON: a 4-valent white vertex joined
+    by one internal edge to a 4-valent black vertex expands into the six
+    permutations of the three outside strands with coefficient -sign(sigma).
+    """
+    if not node_colors:
+        return []
+    matches: List[Dict[str, Any]] = []
+    seen: Set[Tuple[int, int]] = set()
+    for u, neighbors in adj.items():
+        for v in neighbor_list(neighbors):
+            edge = _edge_pair(u, v)
+            if edge in seen:
+                continue
+            seen.add(edge)
+            cu = node_colors.get(int(u))
+            cv = node_colors.get(int(v))
+            if {cu, cv} != {"white", "black"}:
+                continue
+            white = int(u) if cu == "white" else int(v)
+            black = int(v) if white == int(u) else int(u)
+            white_neighbors = neighbor_list(adj.get(white, []))
+            black_neighbors = neighbor_list(adj.get(black, []))
+            if len(white_neighbors) != 4 or len(black_neighbors) != 4:
+                continue
+            input_ports = [int(port) for port in white_neighbors if int(port) != black]
+            output_ports = [int(port) for port in black_neighbors if int(port) != white]
+            if len(input_ports) != 3 or len(output_ports) != 3:
+                continue
+            if len(set(input_ports + output_ports)) != 6:
+                continue
+            input_ports = _ordered_ports_across_edge(white, black, input_ports, node_xy)
+            output_ports = _ordered_ports_across_edge(black, white, output_ports, node_xy)
+            if not _all_antisym_pairings_are_bipartite(input_ports, output_ports, node_colors):
+                continue
+            matches.append(
+                {
+                    "rule": "WB_4VALENT_ANTISYMMETRIZER",
+                    "white": white,
+                    "black": black,
+                    "vertices": [white, black],
+                    "input_ports": input_ports,
+                    "output_ports": output_ports,
+                    "rhs_terms": [
+                        {
+                            "permutation": list(perm),
+                            "coefficient_multiplier": coeff,
+                            "smoothing": "perm_" + "".join(str(x) for x in perm),
+                        }
+                        for perm, coeff in ANTISYMMETRIZER_TERMS
+                    ],
+                }
+            )
+    return matches
+
+
+def apply_antisymmetrizer_move(
+    adj: Adjacency,
+    match: Dict[str, Any],
+    permutation: Iterable[int],
+) -> Adjacency:
+    if match.get("rule") != "WB_4VALENT_ANTISYMMETRIZER":
+        raise ValueError(f"Unsupported antisymmetrizer rule: {match.get('rule')}")
+    white = int(match["white"])
+    black = int(match["black"])
+    input_ports = [int(port) for port in match["input_ports"]]
+    output_ports = [int(port) for port in match["output_ports"]]
+    permutation = [int(item) for item in permutation]
+    if len(input_ports) != 3 or len(output_ports) != 3 or sorted(permutation) != [1, 2, 3]:
+        raise ValueError("Antisymmetrizer move needs three inputs, three outputs, and a permutation of 1,2,3.")
+    new_adj = copy.deepcopy(adj)
+    for input_index, output_index in enumerate(permutation):
+        _splice_external_pair(
+            new_adj,
+            white,
+            input_ports[input_index],
+            black,
+            output_ports[output_index - 1],
+        )
+    for vertex in (white, black):
+        if vertex in new_adj:
+            del new_adj[vertex]
+    new_adj = drop_nonreciprocal_references(new_adj)
+    validate_adjacency(new_adj)
+    return new_adj
+
+
 def smooth_one_hourglass(adj: Adjacency, hg: Hourglass, smoothing: str) -> Adjacency:
     """Remove one wrench/hourglass and perform one of the Figure 4 smoothings."""
     if smoothing not in {"crossing", "parallel"}:
@@ -645,6 +790,10 @@ def smooth_one_hourglass(adj: Adjacency, hg: Hourglass, smoothing: str) -> Adjac
         raise ValueError(f"Hourglass endpoint already removed: {left}-{right}.")
     if not isinstance(adj[left], dict) or not isinstance(adj[right], dict):
         raise ValueError(f"Hourglass endpoints must carry current top/bot ports: {left}-{right}.")
+    if any(adj[left].get(port) is None for port in ("top", "bot")) or any(
+        adj[right].get(port) is None for port in ("top", "bot")
+    ):
+        raise ValueError(f"Hourglass endpoint ports are no longer available: {left}-{right}.")
 
     # Important: read the current ports from adj, not just the original cached
     # ports in hg. Earlier wrench moves may have rewired a neighboring endpoint.
@@ -1243,6 +1392,44 @@ def expand_pair_term_by_figure43(
     return children
 
 
+
+
+def expand_pair_term_by_antisymmetrizer(
+    term: Dict[str, Any],
+    match: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    children = []
+    for rhs in match.get("rhs_terms", []):
+        permutation = [int(item) for item in rhs["permutation"]]
+        multiplier = int(rhs["coefficient_multiplier"])
+        child_x_adj = apply_antisymmetrizer_move(term["x_adj"], match, permutation)
+        child_x_remaining = clean_hourglasses_for_adj(child_x_adj, term["x_remaining"])
+        move = {
+            "phase": "antisymmetrizer",
+            "side": "X",
+            "rule": match["rule"],
+            "vertices": [int(match["white"]), int(match["black"])],
+            "white": int(match["white"]),
+            "black": int(match["black"]),
+            "input_ports": [int(port) for port in match["input_ports"]],
+            "output_ports": [int(port) for port in match["output_ports"]],
+            "permutation": permutation,
+            "smoothing": str(rhs.get("smoothing", "perm_" + "".join(str(x) for x in permutation))),
+            "coefficient_multiplier": multiplier,
+        }
+        children.append(
+            {
+                "x_adj": child_x_adj,
+                "x_remaining": child_x_remaining,
+                "w_adj": term["w_adj"],
+                "w_remaining": term["w_remaining"],
+                "coeff": term["coeff"] * multiplier,
+                "history": term.get("history", []) + [move],
+            }
+        )
+    return children
+
+
 def score_pair_state(
     active: List[Dict[str, Any]],
     discharged: List[Dict[str, Any]],
@@ -1406,6 +1593,13 @@ def evaluate_pair_state_by_coloring(
                 "reason": str(exc),
             }
         evaluation["coeff"] = term["coeff"]
+        evaluation["history"] = term.get("history", [])
+        evaluation["common_forks"] = []
+        evaluation["source_adj"] = term["x_adj"]
+        evaluation["source_hourglasses"] = term["x_remaining"]
+        evaluation["colored_adj"] = term["w_adj"]
+        evaluation["colored_hourglasses"] = term["w_remaining"]
+        evaluation["colored_side"] = "W"
         if evaluation["status"] != "computed":
             evaluation["term_value"] = None
             return None
@@ -1510,6 +1704,13 @@ def evaluate_pair_state_by_x_component_coloring(
             r=r,
         )
         evaluation["coeff"] = term["coeff"]
+        evaluation["history"] = term.get("history", [])
+        evaluation["common_forks"] = []
+        evaluation["source_adj"] = term["x_adj"]
+        evaluation["source_hourglasses"] = term["x_remaining"]
+        evaluation["colored_adj"] = term["w_adj"]
+        evaluation["colored_hourglasses"] = term["w_remaining"]
+        evaluation["colored_side"] = "W"
         if evaluation["status"] != "computed":
             evaluation["term_value"] = None
             return None
@@ -1539,6 +1740,20 @@ def replay_pair_history(
     for move in history:
         side = move["side"]
         smoothing = move["smoothing"]
+        if move.get("phase") == "antisymmetrizer":
+            match = {
+                "rule": move["rule"],
+                "white": int(move["white"]),
+                "black": int(move["black"]),
+                "input_ports": [int(port) for port in move["input_ports"]],
+                "output_ports": [int(port) for port in move["output_ports"]],
+            }
+            if side != "X":
+                raise ValueError("Antisymmetrizer history moves are currently X-side only.")
+            current_x = apply_antisymmetrizer_move(current_x, match, move["permutation"])
+            current_x = drop_nonreciprocal_references(current_x)
+            current_xh = clean_hourglasses_for_adj(current_x, current_xh)
+            continue
         if move.get("phase") == "figure43":
             match = {
                 "rule": move["rule"],
@@ -1870,12 +2085,11 @@ def prove_pair_value_complete_pipeline(
     w_node_colors: Optional[NodeColors] = None,
     w_node_xy: Optional[NodeXY] = None,
 ) -> Dict[str, Any]:
-    """Run the full pairing pipeline in one call.
+    """Run the website pairing pipeline without changing W.
 
-    This is the preferred entry point for the website.  It performs the
-    guided wrench/fork search, resolves X-hourglasses, then evaluates every
-    surviving branch by expanding/coloring W.  It does not accept an empty
-    common-fork list as a fork-lemma discharge.
+    Relations are applied only to X.  Coloring starts only after X has no
+    remaining hourglass metadata and no internal black vertices.  W is then
+    edge-colored as-is from the boundary colors determined by X.
     """
     proof = prove_pair_value_by_x_component_coloring(
         x_adj,
@@ -1884,7 +2098,7 @@ def prove_pair_value_complete_pipeline(
         w_adj,
         w_boundary_labels,
         w_hourglasses,
-        allow_w_wrench=allow_w_wrench,
+        allow_w_wrench=False,
         allowed_forks=allowed_forks,
         guided_beam_width=guided_beam_width,
         x_beam_width=x_beam_width,
@@ -1895,44 +2109,60 @@ def prove_pair_value_complete_pipeline(
         w_node_colors=w_node_colors,
         w_node_xy=w_node_xy,
     )
-    value, fallback = evaluate_active_terms_by_expanding_w_then_coloring(
-        proof,
-        x_adj,
-        x_boundary_labels,
-        x_hourglasses,
-        w_adj,
-        w_boundary_labels,
-        w_hourglasses,
-        max_w_expansions_per_branch=max_w_expansions_per_branch,
-        w_node_colors=w_node_colors,
-        w_node_xy=w_node_xy,
-        r=4,
-    )
     proof = copy.deepcopy(proof)
-    proof["base_status"] = proof.get("status")
-    proof["base_final_pairing_value"] = proof.get("final_pairing_value")
-    proof["w_expansion_fallback"] = fallback
-    proof["w_expanded_terms"] = fallback["w_expanded_terms"]
-    proof["w_expanded_fork_killed"] = fallback["w_expanded_fork_killed"]
-    proof["w_direct_colored_terms"] = fallback["w_direct_colored_terms"]
-    proof["linear_combination_terms"] = [
-        item
-        for item in fallback.get("branch_evaluations", [])
-        if item.get("status") != "fork_killed"
-    ]
-    if value is not None:
-        proof["status"] = fallback["status"]
-        proof["final_pairing_value"] = value
-        if value == 0 and not proof.get("active_terms"):
-            proof["status"] = "proved_zero"
-    else:
-        proof["status"] = "partial"
-        proof["final_pairing_value"] = None
+    proof["allow_w_wrench"] = False
+    proof["w_expansion_fallback"] = {
+        "status": "disabled",
+        "w_expanded_terms": 0,
+        "w_expanded_fork_killed": 0,
+        "w_direct_colored_terms": 0,
+        "branch_evaluations": [],
+        "reason": "W is passive: relations are applied only to X before coloring.",
+    }
+    proof["w_expanded_terms"] = 0
+    proof["w_expanded_fork_killed"] = 0
+    proof["w_direct_colored_terms"] = 0
+    proof["linear_combination_terms"] = proof.get("coloring_evaluations", [])
     return proof
 
 
 def has_x_hourglasses(state: Dict[str, Any]) -> bool:
     return any(normalize_pair_term(term)["x_remaining"] for term in state["active"])
+
+
+def term_x_internal_black_vertices(
+    term: Dict[str, Any],
+    x_boundary_labels: BoundaryLabels,
+    x_node_colors: Optional[NodeColors],
+) -> List[int]:
+    if not x_node_colors:
+        return []
+    normalized = normalize_pair_term(term)
+    return sorted(
+        int(node)
+        for node in normalized["x_adj"]
+        if int(node) not in x_boundary_labels and x_node_colors.get(int(node)) == "black"
+    )
+
+
+def has_x_internal_black_vertices(
+    state: Dict[str, Any],
+    x_boundary_labels: BoundaryLabels,
+    x_node_colors: Optional[NodeColors],
+) -> bool:
+    return any(term_x_internal_black_vertices(term, x_boundary_labels, x_node_colors) for term in state["active"])
+
+
+def x_state_ready_for_coloring(
+    state: Dict[str, Any],
+    x_boundary_labels: BoundaryLabels,
+    x_node_colors: Optional[NodeColors],
+) -> bool:
+    return not has_x_hourglasses(state) and not has_x_internal_black_vertices(
+        state,
+        x_boundary_labels,
+        x_node_colors,
+    )
 
 
 def choose_x_resolution_successors(
@@ -1949,6 +2179,38 @@ def choose_x_resolution_successors(
     for term_idx, term in enumerate(active):
         term = normalize_pair_term(term)
         if not term["x_remaining"]:
+            if plucker_product_components(term["x_adj"], x_boundary_labels, r=4) is None:
+                for match in detect_antisymmetrizer_moves(term["x_adj"], x_node_colors, x_node_xy):
+                    try:
+                        children = expand_pair_term_by_antisymmetrizer(term, match)
+                    except ValueError:
+                        continue
+                    next_terms = active[:term_idx] + active[term_idx + 1 :] + children
+                    next_terms = consolidate_pair_terms(next_terms)
+                    next_active, newly_discharged = discharge_pair_terms_by_common_fork(
+                        next_terms,
+                        x_boundary_labels,
+                        w_boundary_labels,
+                        allowed_forks,
+                    )
+                    next_discharged = discharged + newly_discharged
+                    successors.append(
+                        {
+                            "active": next_active,
+                            "discharged": next_discharged,
+                            "expanded_relation": "antisymmetrizer",
+                            "expanded_side": "X",
+                            "expanded_rule": match["rule"],
+                            "expanded_vertices": [int(match["white"]), int(match["black"])],
+                            "score": score_pair_state(
+                                next_active,
+                                next_discharged,
+                                x_boundary_labels,
+                                w_boundary_labels,
+                                allowed_forks,
+                            ),
+                        }
+                    )
             continue
         for hg in term["x_remaining"]:
             try:
@@ -2379,7 +2641,7 @@ def prove_pair_value_by_x_component_coloring(
                     final_pairing_value=0,
                     allow_w_wrench=allow_w_wrench,
                 )
-            if not has_x_hourglasses(state):
+            if x_state_ready_for_coloring(state, x_boundary_labels, x_node_colors):
                 evaluated = evaluate_pair_state_by_x_component_coloring(
                     state,
                     x_boundary_labels,
@@ -2419,12 +2681,17 @@ def prove_pair_value_by_x_component_coloring(
         if not candidates:
             break
 
-        def x_resolution_score(state: Dict[str, Any]) -> Tuple[int, int, int, int, int]:
+        def x_resolution_score(state: Dict[str, Any]) -> Tuple[int, int, int, int, int, int]:
             x_remaining = sum(len(t["x_remaining"]) for t in state["active"])
+            x_black = sum(
+                len(term_x_internal_black_vertices(t, x_boundary_labels, x_node_colors))
+                for t in state["active"]
+            )
             w_remaining = sum(len(t["w_remaining"]) for t in state["active"])
             return (
-                1 if x_remaining == 0 else 0,
+                1 if x_remaining == 0 and x_black == 0 else 0,
                 -x_remaining,
+                -x_black,
                 len(state["discharged"]),
                 -len(state["active"]),
                 -w_remaining,

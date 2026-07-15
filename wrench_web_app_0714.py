@@ -1109,7 +1109,45 @@ def reconstruct_run(x_path: Path, w_path: Path, proof: Dict[str, Any]):
     current_xh, current_wh = x_hgs, w_hgs
     for idx, continue_move in enumerate(active_history):
         side = continue_move.get("side", "X")
-        is_figure43 = continue_move.get("phase") == "figure43"
+        phase = continue_move.get("phase", "main_search")
+        if phase == "antisymmetrizer":
+            before_x, before_w = current_x, current_w
+            before_xh, before_wh = current_xh, current_wh
+            current_x, current_xh, current_w, current_wh = wrench.replay_pair_history(
+                x_adj,
+                x_hgs,
+                w_adj,
+                w_hgs,
+                active_history[: idx + 1],
+            )
+            steps.append(
+                {
+                    "side": side,
+                    "selected": tuple(int(v) for v in continue_move.get("vertices", [])),
+                    "current_x": before_x,
+                    "current_w": before_w,
+                    "current_xh": before_xh,
+                    "current_wh": before_wh,
+                    "killed": {"status": "six_term_relation", "common_forks": [], "coeff": ""},
+                    "killed_smoothing": "other five permutations",
+                    "sibling_smoothing": "other five permutations",
+                    "continue_smoothing": continue_move.get("smoothing", ""),
+                    "killed_x": before_x,
+                    "killed_w": before_w,
+                    "killed_xh": before_xh,
+                    "killed_wh": before_wh,
+                    "killed_new_x": set(),
+                    "killed_new_w": set(),
+                    "continue_x": current_x,
+                    "continue_w": current_w,
+                    "continue_xh": current_xh,
+                    "continue_wh": current_wh,
+                    "continue_new_x": edge_set(current_x) - edge_set(before_x),
+                    "continue_new_w": edge_set(current_w) - edge_set(before_w),
+                }
+            )
+            continue
+        is_figure43 = phase == "figure43"
         selected = tuple(sorted(int(x) for x in continue_move.get("hourglass", continue_move.get("vertices", []))))
         hg = None
         if not is_figure43:
@@ -1289,6 +1327,25 @@ def render_additional_branch_pictures(
     """
 
 
+def phase_display_label(phase: str) -> str:
+    if phase == "figure43":
+        return "Figure 43"
+    if phase == "antisymmetrizer":
+        return "white-black antisymmetrizer"
+    if phase == "w_expansion_fallback":
+        return "W fallback"
+    return "main search"
+
+
+def move_piece_label(move: Dict[str, Any]) -> str:
+    phase = str(move.get("phase", "main_search"))
+    if phase == "figure43":
+        return "Figure 43 piece"
+    if phase == "antisymmetrizer":
+        return "white-black pair"
+    return "hourglass"
+
+
 def move_sequence_table(history: List[Dict[str, Any]]) -> str:
     if not history:
         return '<p class="muted">No skein moves were applied on this branch.</p>'
@@ -1299,7 +1356,7 @@ def move_sequence_table(history: List[Dict[str, Any]]) -> str:
         multiplier = int(move.get("coefficient_multiplier", wrench.move_multiplier(smoothing)))
         running_coeff *= multiplier
         phase = str(move.get("phase", "main_search"))
-        phase_label = "Figure 43" if phase == "figure43" else ("W fallback" if phase == "w_expansion_fallback" else "main search")
+        phase_label = phase_display_label(phase)
         target = move.get("hourglass", move.get("vertices", []))
         rows.append(
             "<tr>"
@@ -1710,6 +1767,7 @@ def compute_pair_context(params: Dict[str, str]) -> Dict[str, Any]:
     beam_width = int(params.get("beam_width", "120") or "120")
     allow_w = params.get("allow_w", "0") == "1"
 
+
     x_adj, x_bounds, x_hgs = wrench.parse_web(x_path)
     w_adj, w_bounds, w_hgs = wrench.parse_web(w_path)
     x_node_colors, x_node_xy = wrench.parse_web_metadata(x_path)
@@ -1970,7 +2028,6 @@ def run_pair(params: Dict[str, str]) -> str:
         for idx, step in enumerate(steps, start=1):
             killed_forks = step["killed"].get("common_forks", [])
             sibling_status = step["killed"].get("status", "")
-            fork = killed_forks[0] if sibling_status == "fork_killed" and killed_forks else None
             if sibling_status == "fork_killed":
                 killed_title = "Killed branch by fork lemma"
                 killed_note = f"fork(s): {html.escape(str(killed_forks))}, coeff {html.escape(str(step['killed'].get('coeff')))}"
@@ -2005,6 +2062,30 @@ def run_pair(params: Dict[str, str]) -> str:
                 continue_title = "Displayed continuing branch"
                 continue_note = "this is the branch followed in the trace"
             selected = step["selected"]
+            display_killed_w = step['killed_w']
+            display_killed_x = step['killed_x']
+            display_killed_wh = step['killed_wh']
+            display_killed_xh = step['killed_xh']
+            display_killed_new_w = step['killed_new_w']
+            display_killed_new_x = step['killed_new_x']
+            if sibling_status == "continued_then_fork_killed" and step["killed"].get("history"):
+                try:
+                    terminal_x, terminal_xh, terminal_w, terminal_wh = wrench.replay_pair_history(
+                        x_adj,
+                        x_hgs,
+                        w_adj,
+                        w_hgs,
+                        step["killed"].get("history", []),
+                    )
+                    display_killed_w = terminal_w
+                    display_killed_x = terminal_x
+                    display_killed_wh = terminal_wh
+                    display_killed_xh = terminal_xh
+                    display_killed_new_w = set()
+                    display_killed_new_x = set()
+                    killed_title = "Later fork-killed branch"
+                except Exception:
+                    pass
             step_html.append(
                 f"""
                 <section class="step">
@@ -2019,8 +2100,8 @@ def run_pair(params: Dict[str, str]) -> str:
                       <div class="pair-title">{killed_title}</div>
                       <div class="pair-note">{killed_note}</div>
                       <div class="mini-pair">
-                        {draw_web_svg('W', w_graph, step['killed_w'], step['killed_wh'], highlight_fork=fork, edge_colors={e:'#2586d8' for e in step['killed_new_w']}, size=250)}
-                        {draw_web_svg('X', x_graph, step['killed_x'], step['killed_xh'], highlight_fork=fork, edge_colors={e:'#2586d8' for e in step['killed_new_x']}, size=250)}
+                        {draw_web_svg('W', w_graph, display_killed_w, display_killed_wh, highlight_fork=fork, edge_colors={e:'#2586d8' for e in display_killed_new_w}, size=250)}
+                        {draw_web_svg('X', x_graph, display_killed_x, display_killed_xh, highlight_fork=fork, edge_colors={e:'#2586d8' for e in display_killed_new_x}, size=250)}
                       </div>
                     </div>
                     <div class="pair-card">
@@ -2059,6 +2140,8 @@ def run_pair(params: Dict[str, str]) -> str:
                 "continued_active": "continued and remains active",
                 "not_found": "not found on displayed path",
             }.get(sibling_status, str(sibling_status))
+            extra = int(step["killed"].get("continued_steps", 0) or 0)
+            extra_text = f" after {extra} further move(s)" if sibling_status == "continued_then_fork_killed" else ""
             rows.append(
                 "<tr>"
                 f"<td>{idx}</td>"
@@ -2066,7 +2149,7 @@ def run_pair(params: Dict[str, str]) -> str:
                 f"<td>{html.escape(str(list(step['selected'])))}</td>"
                 f"<td>{html.escape(step['continue_smoothing'])}</td>"
                 f"<td>{html.escape(step['killed_smoothing'])}</td>"
-                f"<td>{html.escape(status_label)}: {html.escape(str(killed_forks))}</td>"
+                f"<td>{html.escape(status_label + extra_text)}: {html.escape(str(killed_forks))}</td>"
                 "</tr>"
             )
         step_html.append(
@@ -2135,7 +2218,7 @@ def run_pair(params: Dict[str, str]) -> str:
         </section>
         <section class="toc">
           <h2>What the page is showing</h2>
-          <p>Each wrench move replaces the active pair by two branches. The Branch Ledger lists every terminal or still-open branch. Expanding a row shows the skein choices on that branch and the W/X picture where it is killed, colored, or left unresolved.</p>
+          <p>Relations are applied only to X. W is kept fixed and is colored only after X has no hourglasses and no internal black vertices. The Branch Ledger lists every terminal or still-open branch.</p>
         </section>
         {branch_ledger_html}
         {''.join(step_html)}
@@ -2240,7 +2323,14 @@ def render_coloring_section(
             except (TypeError, ValueError):
                 continue
             if isinstance(value, dict):
-                out[node] = {int(k): v for k, v in value.items()}
+                converted = {}
+                for k, v in value.items():
+                    try:
+                        port = int(k)
+                    except (TypeError, ValueError):
+                        port = str(k)
+                    converted[port] = None if v is None else int(v)
+                out[node] = converted
             else:
                 out[node] = [int(v) for v in value]
         return out
@@ -2368,7 +2458,7 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
     raw_max_steps = params.get("max_steps", "")
     max_steps = "" if raw_max_steps in {"8", "auto"} else html.escape(raw_max_steps)
     beam = html.escape(params.get("beam_width", "120"))
-    allow_w = "checked" if params.get("allow_w", "1") == "1" else ""
+    allow_w = ""
     show_steps = "checked" if params.get("show_steps") == "1" else ""
     has_visible_manual_pair = bool(params.get("w", "").strip() and params.get("x", "").strip())
     use_transpose = "checked" if params.get("use_transpose") == "1" and not has_visible_manual_pair else ""
@@ -2452,7 +2542,7 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
       <label>X web index, word, or JSON file<input id="x-input" name="x" type="text" value="{x}" placeholder="0447_1112122334344234.json"></label>
       <label>Step cap, optional<input name="max_steps" type="number" value="{max_steps}" min="0" placeholder="auto"></label>
       <label>Beam width<input name="beam_width" type="number" value="{beam}" min="1"></label>
-      <label class="check"><input type="checkbox" name="allow_w" value="1" {allow_w}> allow wrench moves on W</label>
+      <label class="check muted"><input type="checkbox" disabled> W is passive; apply relations only to X</label>
       <label class="check"><input type="checkbox" name="show_steps" value="1" {show_steps}> show full step pictures</label>
       <button type="submit">Run proof search</button>
       <div id="survivor-menu-slot">
