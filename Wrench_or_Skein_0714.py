@@ -7,6 +7,9 @@ hourglass endpoints and replace the four incident ordinary half-edges by
 
     crossing smoothing  -  parallel smoothing.
 
+Supported Figure 43 four-cycle rewrites are separate from the local wrench
+relation; the implemented left/right-hourglass case is horizontal - 2 vertical.
+
 The optional reference pruning is deliberately separate from the local wrench
 relation, so the expansion can be inspected without hidden filtering.
 """
@@ -27,6 +30,8 @@ from typing import Any, Dict, Iterable, List, MutableMapping, Optional, Set, Tup
 Adjacency = Dict[int, Any]
 BoundaryLabels = Dict[int, int]
 Hourglass = Dict[str, Any]
+NodeColors = Dict[int, str]
+NodeXY = Dict[int, Tuple[float, float]]
 
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_PROJECT_ROOTS = [
@@ -216,6 +221,18 @@ def parse_web(
     return adj, boundary_labels, hourglasses
 
 
+def parse_web_metadata(filepath: str | Path) -> Tuple[NodeColors, NodeXY]:
+    """Return fixed node metadata needed by local relation detectors."""
+    with Path(filepath).open("r") as handle:
+        data = json.load(handle)
+    colors = {int(node["id"]): str(node.get("color", "")) for node in data.get("nodes", [])}
+    xy = {
+        int(node["id"]): (float(node.get("x", 0.0)), float(node.get("y", 0.0)))
+        for node in data.get("nodes", [])
+    }
+    return colors, xy
+
+
 def neighbor_list(neighbors: Any) -> List[int]:
     if isinstance(neighbors, dict):
         return [int(v) for v in neighbors.values() if v is not None]
@@ -257,20 +274,12 @@ def clean_hourglasses_for_adj(adj: Adjacency, hourglasses: List[Hourglass]) -> L
             continue
         if not isinstance(adj[left], dict) or not isinstance(adj[right], dict):
             continue
-        ports = [
-            adj[left].get("top"),
-            adj[left].get("bot"),
-            adj[right].get("top"),
-            adj[right].get("bot"),
-        ]
-        if any(port is None or int(port) not in adj for port in ports):
-            continue
-        if any(int(port) in {left, right} for port in ports):
-            continue
-        if len({int(port) for port in ports}) < 4:
-            continue
-        if any((left not in neighbor_list(adj[int(port)]) and right not in neighbor_list(adj[int(port)])) for port in ports):
-            continue
+        # Keep the metadata whenever the two hourglass endpoint records still
+        # exist.  Some later local rewrites can temporarily change one ordinary
+        # port before the branch is colored; discarding the metadata here leaves
+        # orphan dict-shaped endpoints that the coloring stage quite rightly
+        # rejects.  Individual expansion routines still validate the ports
+        # before applying a wrench move.
         cleaned.append(hg)
     return cleaned
 
@@ -357,6 +366,272 @@ def replace_neighbor(node: int, old_neighbor: int, new_neighbor: int, adj: Adjac
 def splice_pair(adj: Adjacency, a_endpoint: int, a_port: int, b_endpoint: int, b_port: int) -> None:
     replace_neighbor(a_port, a_endpoint, b_port, adj)
     replace_neighbor(b_port, b_endpoint, a_port, adj)
+
+
+def _edge_pair(u: int, v: int) -> Tuple[int, int]:
+    return tuple(sorted((int(u), int(v))))
+
+
+def ordinary_edge_pairs(adj: Adjacency) -> Set[Tuple[int, int]]:
+    return {_edge_pair(u, v) for u, ns in adj.items() for v in neighbor_list(ns)}
+
+
+def _hourglass_pairs(hourglasses: List[Hourglass]) -> Set[Tuple[int, int]]:
+    return {_edge_pair(hg["white"], hg["black"]) for hg in hourglasses}
+
+
+def _ordered_cycle_vertices(vertices: Iterable[int], node_xy: NodeXY) -> List[int]:
+    verts = list(vertices)
+    cx = sum(node_xy[v][0] for v in verts) / len(verts)
+    cy = sum(node_xy[v][1] for v in verts) / len(verts)
+    ordered = sorted(verts, key=lambda v: math.atan2(node_xy[v][1] - cy, node_xy[v][0] - cx), reverse=True)
+    start = min(range(len(ordered)), key=lambda i: (-node_xy[ordered[i]][1], node_xy[ordered[i]][0]))
+    return ordered[start:] + ordered[:start]
+
+
+def detect_figure43_moves(
+    adj: Adjacency,
+    remaining_hourglasses: List[Hourglass],
+    node_colors: Optional[NodeColors],
+    node_xy: Optional[NodeXY],
+) -> List[Dict[str, Any]]:
+    """Detect live Figure 43 rewrites that the engine knows how to apply.
+
+    At present this applies the bottom row of the screenshot/Figure 43:
+    ordinary top and bottom sides, hourglass left and right sides, alternating
+    black-white-black-white vertices.  At q=1 the local relation is
+
+        horizontal term - 2 * vertical term.
+
+    The other Figure 43 rows are deliberately not guessed here; they should be
+    added as separate RHS constructors once their port-level rewrites are
+    specified.
+    """
+    if not node_colors or not node_xy:
+        return []
+    ordinary = ordinary_edge_pairs(adj)
+    hourglass_pairs = _hourglass_pairs(remaining_hourglasses)
+    usable = ordinary | hourglass_pairs
+    combined: Dict[int, Set[int]] = {node: set() for node in adj}
+    for u, v in usable:
+        if u in adj and v in adj:
+            combined.setdefault(u, set()).add(v)
+            combined.setdefault(v, set()).add(u)
+
+    candidates: Set[Tuple[int, int, int, int]] = set()
+    for a in combined:
+        for b in combined.get(a, set()):
+            for c in combined.get(b, set()):
+                if c in {a, b}:
+                    continue
+                for d in combined.get(c, set()):
+                    if d in {a, b, c}:
+                        continue
+                    if a in combined.get(d, set()):
+                        candidates.add(tuple(sorted((a, b, c, d))))
+
+    matches: List[Dict[str, Any]] = []
+    seen: Set[Tuple[int, int, int, int]] = set()
+    for quad in candidates:
+        if any(v not in node_xy or v not in node_colors for v in quad):
+            continue
+        ordered = _ordered_cycle_vertices(quad, node_xy)
+        sides = [
+            _edge_pair(ordered[0], ordered[1]),
+            _edge_pair(ordered[1], ordered[2]),
+            _edge_pair(ordered[2], ordered[3]),
+            _edge_pair(ordered[3], ordered[0]),
+        ]
+        if not all(side in usable for side in sides):
+            continue
+        if _edge_pair(ordered[0], ordered[2]) in usable or _edge_pair(ordered[1], ordered[3]) in usable:
+            continue
+        side_types = tuple("hourglass" if side in hourglass_pairs else "ordinary" for side in sides)
+        colors = tuple(node_colors.get(v, "") for v in ordered)
+        if side_types != ("ordinary", "hourglass", "ordinary", "hourglass"):
+            continue
+        if colors != ("black", "white", "black", "white"):
+            continue
+        ports = _figure43_external_ports(adj, *ordered)
+        if ports is None:
+            continue
+        rhs_terms = [
+            {"smoothing": "horizontal", "coefficient_multiplier": 1},
+            {"smoothing": "vertical", "coefficient_multiplier": -2},
+        ]
+        if not all(
+            _figure43_pairings_are_bipartite(
+                _figure43_pairings_from_ports(ports, str(rhs["smoothing"])),
+                ports,
+                node_colors,
+            )
+            for rhs in rhs_terms
+        ):
+            continue
+        key = tuple(ordered)
+        if key in seen:
+            continue
+        seen.add(key)
+        matches.append(
+            {
+                "rule": "GPPSS_F43_left_right_hourglasses",
+                "vertices_top_right_bottom_left": ordered,
+                "side_types_top_right_bottom_left": list(side_types),
+                "colors_top_right_bottom_left": list(colors),
+                "external_ports_top_right_bottom_left": [
+                    ports["top_left"],
+                    ports["top_right"],
+                    ports["bottom_right"],
+                    ports["bottom_left"],
+                ],
+                "external_port_colors_top_right_bottom_left": [
+                    node_colors.get(ports["top_left"]),
+                    node_colors.get(ports["top_right"]),
+                    node_colors.get(ports["bottom_right"]),
+                    node_colors.get(ports["bottom_left"]),
+                ],
+                "rhs_terms": rhs_terms,
+            }
+        )
+    return matches
+
+
+def _external_port_for_cycle_vertex(adj: Adjacency, vertex: int, cycle_neighbors: Iterable[int]) -> Optional[int]:
+    excluded = {int(n) for n in cycle_neighbors}
+    candidates = [n for n in neighbor_list(adj.get(vertex, [])) if int(n) not in excluded]
+    if len(candidates) != 1:
+        return None
+    return int(candidates[0])
+
+
+def _colors_are_opposite(color_a: Optional[str], color_b: Optional[str]) -> bool:
+    if color_a not in {"black", "white"} or color_b not in {"black", "white"}:
+        return True
+    return color_a != color_b
+
+
+def _figure43_external_ports(
+    adj: Adjacency,
+    tl: int,
+    tr: int,
+    br: int,
+    bl: int,
+) -> Optional[Dict[str, int]]:
+    # The four outside half-edges are determined by the Figure 43 square, not
+    # by a geometric guess.  Exclude both local cycle neighbors at each corner:
+    # one ordinary side and one hourglass side.
+    ext_tl = _external_port_for_cycle_vertex(adj, tl, (tr, bl))
+    ext_tr = _external_port_for_cycle_vertex(adj, tr, (tl, br))
+    ext_br = _external_port_for_cycle_vertex(adj, br, (tr, bl))
+    ext_bl = _external_port_for_cycle_vertex(adj, bl, (br, tl))
+    if None in {ext_tl, ext_tr, ext_br, ext_bl}:
+        return None
+    return {
+        "top_left": int(ext_tl),
+        "top_right": int(ext_tr),
+        "bottom_right": int(ext_br),
+        "bottom_left": int(ext_bl),
+    }
+
+
+def _figure43_pairings_from_ports(
+    ports: Dict[str, int],
+    smoothing: str,
+) -> List[Tuple[str, str]]:
+    if smoothing == "horizontal":
+        # The +1 term in the displayed Figure 43 row: the two outside top
+        # ports are joined, and the two outside bottom ports are joined.
+        return [("top_left", "top_right"), ("bottom_left", "bottom_right")]
+    if smoothing == "vertical":
+        # The -2 term: the two outside left ports are joined, and the two
+        # outside right ports are joined.
+        return [("top_left", "bottom_left"), ("top_right", "bottom_right")]
+    raise ValueError("Figure 43 smoothing must be horizontal or vertical.")
+
+
+def _figure43_pairings_are_bipartite(
+    pairings: Iterable[Tuple[str, str]],
+    ports: Dict[str, int],
+    node_colors: Optional[NodeColors],
+) -> bool:
+    if not node_colors:
+        return True
+    for a_name, b_name in pairings:
+        a = ports[a_name]
+        b = ports[b_name]
+        if not _colors_are_opposite(node_colors.get(a), node_colors.get(b)):
+            return False
+    return True
+
+
+def _splice_external_pair(adj: Adjacency, local_a: int, ext_a: int, local_b: int, ext_b: int) -> None:
+    if ext_a == ext_b:
+        raise ValueError("Figure 43 rewrite would create a self-loop external splice.")
+    replace_neighbor(ext_a, local_a, ext_b, adj)
+    replace_neighbor(ext_b, local_b, ext_a, adj)
+
+
+def apply_figure43_move(
+    adj: Adjacency,
+    remaining_hourglasses: List[Hourglass],
+    match: Dict[str, Any],
+    smoothing: str,
+) -> Tuple[Adjacency, List[Hourglass]]:
+    """Apply a supported Figure 43 local rewrite to one web state."""
+    if match.get("rule") != "GPPSS_F43_left_right_hourglasses":
+        raise ValueError(f"Unsupported Figure 43 rule: {match.get('rule')}")
+    if smoothing not in {"horizontal", "vertical"}:
+        raise ValueError("Figure 43 smoothing must be horizontal or vertical.")
+
+    tl, tr, br, bl = [int(v) for v in match["vertices_top_right_bottom_left"]]
+    new_adj = copy.deepcopy(adj)
+    ports = _figure43_external_ports(new_adj, tl, tr, br, bl)
+    if ports is None:
+        raise ValueError("Figure 43 rewrite could not identify four external ports.")
+
+    local_by_port = {
+        "top_left": tl,
+        "top_right": tr,
+        "bottom_right": br,
+        "bottom_left": bl,
+    }
+    pairings = _figure43_pairings_from_ports(ports, smoothing)
+    port_color_list = match.get("external_port_colors_top_right_bottom_left")
+    if isinstance(port_color_list, list) and len(port_color_list) == 4:
+        port_colors = {
+            "top_left": port_color_list[0],
+            "top_right": port_color_list[1],
+            "bottom_right": port_color_list[2],
+            "bottom_left": port_color_list[3],
+        }
+        for a_name, b_name in pairings:
+            if not _colors_are_opposite(port_colors.get(a_name), port_colors.get(b_name)):
+                raise ValueError(
+                    "Figure 43 rewrite would connect same-colored outside ports: "
+                    f"{a_name}-{b_name} for {smoothing}."
+                )
+
+    for a_name, b_name in pairings:
+        _splice_external_pair(
+            new_adj,
+            local_by_port[a_name],
+            ports[a_name],
+            local_by_port[b_name],
+            ports[b_name],
+        )
+
+    for vertex in (tl, tr, br, bl):
+        if vertex in new_adj:
+            del new_adj[vertex]
+    new_adj = drop_nonreciprocal_references(new_adj)
+    new_hgs = [
+        hg
+        for hg in remaining_hourglasses
+        if _edge_pair(hg["white"], hg["black"]) not in {_edge_pair(tr, br), _edge_pair(bl, tl)}
+    ]
+    new_hgs = clean_hourglasses_for_adj(new_adj, new_hgs)
+    validate_adjacency(new_adj)
+    return new_adj, new_hgs
 
 
 def smooth_one_hourglass(adj: Adjacency, hg: Hourglass, smoothing: str) -> Adjacency:
@@ -918,6 +1193,56 @@ def expand_pair_term(term: Dict[str, Any], side: str, hg: Hourglass) -> List[Dic
     return children
 
 
+def expand_pair_term_by_figure43(
+    term: Dict[str, Any],
+    side: str,
+    match: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    if side not in {"X", "W"}:
+        raise ValueError("side must be X or W.")
+    children = []
+    for rhs in match.get("rhs_terms", []):
+        smoothing = str(rhs["smoothing"])
+        multiplier = int(rhs["coefficient_multiplier"])
+        if side == "X":
+            child_x_adj, child_x_remaining = apply_figure43_move(
+                term["x_adj"],
+                term["x_remaining"],
+                match,
+                smoothing,
+            )
+            child_w_adj = term["w_adj"]
+            child_w_remaining = term["w_remaining"]
+        else:
+            child_x_adj = term["x_adj"]
+            child_x_remaining = term["x_remaining"]
+            child_w_adj, child_w_remaining = apply_figure43_move(
+                term["w_adj"],
+                term["w_remaining"],
+                match,
+                smoothing,
+            )
+        move = {
+            "phase": "figure43",
+            "side": side,
+            "rule": match["rule"],
+            "vertices": [int(v) for v in match["vertices_top_right_bottom_left"]],
+            "smoothing": smoothing,
+            "coefficient_multiplier": multiplier,
+        }
+        children.append(
+            {
+                "x_adj": child_x_adj,
+                "x_remaining": child_x_remaining,
+                "w_adj": child_w_adj,
+                "w_remaining": child_w_remaining,
+                "coeff": term["coeff"] * multiplier,
+                "history": term.get("history", []) + [move],
+            }
+        )
+    return children
+
+
 def score_pair_state(
     active: List[Dict[str, Any]],
     discharged: List[Dict[str, Any]],
@@ -946,6 +1271,10 @@ def choose_pair_successors(
     *,
     allow_w_wrench: bool,
     allowed_forks: Optional[Set[frozenset[int]]] = None,
+    x_node_colors: Optional[NodeColors] = None,
+    x_node_xy: Optional[NodeXY] = None,
+    w_node_colors: Optional[NodeColors] = None,
+    w_node_xy: Optional[NodeXY] = None,
 ) -> List[Dict[str, Any]]:
     successors: List[Dict[str, Any]] = []
     for term_idx, term in enumerate(active):
@@ -970,8 +1299,60 @@ def choose_pair_successors(
                 {
                     "active": next_active,
                     "discharged": next_discharged,
+                    "expanded_relation": "wrench",
                     "expanded_side": side,
                     "expanded_hourglass": [int(hg["white"]), int(hg["black"])],
+                    "score": score_pair_state(
+                        next_active,
+                        next_discharged,
+                        x_boundary_labels,
+                        w_boundary_labels,
+                        allowed_forks,
+                    ),
+                }
+            )
+        relation_choices: List[Tuple[str, Dict[str, Any]]] = []
+        relation_choices.extend(
+            ("X", match)
+            for match in detect_figure43_moves(
+                term["x_adj"],
+                term["x_remaining"],
+                x_node_colors,
+                x_node_xy,
+            )
+        )
+        if allow_w_wrench:
+            relation_choices.extend(
+                ("W", match)
+                for match in detect_figure43_moves(
+                    term["w_adj"],
+                    term["w_remaining"],
+                    w_node_colors,
+                    w_node_xy,
+                )
+            )
+        for side, match in relation_choices:
+            try:
+                children = expand_pair_term_by_figure43(term, side, match)
+            except ValueError:
+                continue
+            next_terms = active[:term_idx] + active[term_idx + 1 :] + children
+            next_terms = consolidate_pair_terms(next_terms)
+            next_active, newly_discharged = discharge_pair_terms_by_common_fork(
+                next_terms,
+                x_boundary_labels,
+                w_boundary_labels,
+                allowed_forks,
+            )
+            next_discharged = discharged + newly_discharged
+            successors.append(
+                {
+                    "active": next_active,
+                    "discharged": next_discharged,
+                    "expanded_relation": "figure43",
+                    "expanded_side": side,
+                    "expanded_rule": match["rule"],
+                    "expanded_vertices": [int(v) for v in match["vertices_top_right_bottom_left"]],
                     "score": score_pair_state(
                         next_active,
                         next_discharged,
@@ -1158,6 +1539,22 @@ def replay_pair_history(
     for move in history:
         side = move["side"]
         smoothing = move["smoothing"]
+        if move.get("phase") == "figure43":
+            match = {
+                "rule": move["rule"],
+                "vertices_top_right_bottom_left": [int(v) for v in move["vertices"]],
+            }
+            if side == "X":
+                current_x, current_xh = apply_figure43_move(current_x, current_xh, match, smoothing)
+                current_x = drop_nonreciprocal_references(current_x)
+                current_xh = clean_hourglasses_for_adj(current_x, current_xh)
+            elif side == "W":
+                current_w, current_wh = apply_figure43_move(current_w, current_wh, match, smoothing)
+                current_w = drop_nonreciprocal_references(current_w)
+                current_wh = clean_hourglasses_for_adj(current_w, current_wh)
+            else:
+                raise ValueError(f"Unknown branch side in history: {side!r}")
+            continue
         key = tuple(sorted(int(x) for x in move["hourglass"]))
         if side == "X":
             hg = next(h for h in current_xh if tuple(sorted((int(h["white"]), int(h["black"])))) == key)
@@ -1186,6 +1583,8 @@ def evaluate_active_terms_by_expanding_w_then_coloring(
     w_hourglasses: List[Hourglass],
     *,
     max_w_expansions_per_branch: int = 16,
+    w_node_colors: Optional[NodeColors] = None,
+    w_node_xy: Optional[NodeXY] = None,
     r: int = 4,
 ) -> Tuple[Optional[int], Dict[str, Any]]:
     """Evaluate surviving branches after X-component coloring stalls.
@@ -1256,6 +1655,72 @@ def evaluate_active_terms_by_expanding_w_then_coloring(
                         "history": current_history,
                     }
                 )
+                continue
+            figure43_matches = detect_figure43_moves(current_w, current_wh, w_node_colors, w_node_xy)
+            if figure43_matches:
+                if branch_expansions >= max_w_expansions_per_branch:
+                    if condition is None:
+                        return None, {
+                            "status": "not_computed",
+                            "w_expanded_terms": expanded_terms,
+                            "w_expanded_fork_killed": fork_killed,
+                            "w_direct_colored_terms": direct_colored_terms,
+                            "branch_evaluations": branch_evaluations,
+                            "reason": (
+                                "W expansion cap reached before applying a Figure 43 relation, "
+                                "and X does not have exactly four boundary-bearing connected components"
+                            ),
+                        }
+                    coloring = consistent_coloring_data(
+                        current_w,
+                        w_boundary_labels,
+                        condition,
+                        hourglasses=current_wh,
+                        r=r,
+                    )
+                    count = int(coloring["count"])
+                    total += coeff * count
+                    direct_colored_terms += 1
+                    branch_evaluations.append(
+                        {
+                            "status": "computed_direct_w_hourglass_coloring",
+                            "coeff": coeff,
+                            "coloring_count": count,
+                            "term_value": coeff * count,
+                            "source_side": "X_components",
+                            "boundary_color_by_label": condition,
+                            "sample_edge_colors": coloring.get("sample_edge_colors", []),
+                            "sample_hourglass_colors": coloring.get("sample_hourglass_colors", []),
+                            "hourglass_swap_quotient": coloring.get("hourglass_swap_quotient", True),
+                            "colored_side": "W",
+                            "colored_adj": current_w,
+                            "colored_hourglasses": current_wh,
+                            "source_adj": x_now,
+                            "history": current_history,
+                            "remaining_w_hourglasses": [
+                                [int(hg["white"]), int(hg["black"])] for hg in current_wh
+                            ],
+                        }
+                    )
+                    continue
+                match = figure43_matches[0]
+                for rhs in match.get("rhs_terms", []):
+                    smoothing = str(rhs["smoothing"])
+                    multiplier = int(rhs["coefficient_multiplier"])
+                    try:
+                        child_w, child_wh = apply_figure43_move(current_w, current_wh, match, smoothing)
+                    except ValueError:
+                        continue
+                    move = {
+                        "phase": "figure43",
+                        "side": "W",
+                        "rule": match["rule"],
+                        "vertices": [int(v) for v in match["vertices_top_right_bottom_left"]],
+                        "smoothing": smoothing,
+                        "coefficient_multiplier": multiplier,
+                    }
+                    stack.append((child_w, child_wh, coeff * multiplier, current_history + [move]))
+                branch_expansions += 1
                 continue
             if current_wh:
                 if branch_expansions >= max_w_expansions_per_branch:
@@ -1400,6 +1865,10 @@ def prove_pair_value_complete_pipeline(
     guided_steps: Optional[int] = None,
     x_resolution_steps: Optional[int] = None,
     max_w_expansions_per_branch: int = 16,
+    x_node_colors: Optional[NodeColors] = None,
+    x_node_xy: Optional[NodeXY] = None,
+    w_node_colors: Optional[NodeColors] = None,
+    w_node_xy: Optional[NodeXY] = None,
 ) -> Dict[str, Any]:
     """Run the full pairing pipeline in one call.
 
@@ -1421,6 +1890,10 @@ def prove_pair_value_complete_pipeline(
         x_beam_width=x_beam_width,
         guided_steps=guided_steps,
         x_resolution_steps=x_resolution_steps,
+        x_node_colors=x_node_colors,
+        x_node_xy=x_node_xy,
+        w_node_colors=w_node_colors,
+        w_node_xy=w_node_xy,
     )
     value, fallback = evaluate_active_terms_by_expanding_w_then_coloring(
         proof,
@@ -1431,6 +1904,8 @@ def prove_pair_value_complete_pipeline(
         w_boundary_labels,
         w_hourglasses,
         max_w_expansions_per_branch=max_w_expansions_per_branch,
+        w_node_colors=w_node_colors,
+        w_node_xy=w_node_xy,
         r=4,
     )
     proof = copy.deepcopy(proof)
@@ -1466,6 +1941,8 @@ def choose_x_resolution_successors(
     x_boundary_labels: BoundaryLabels,
     w_boundary_labels: BoundaryLabels,
     allowed_forks: Optional[Set[frozenset[int]]] = None,
+    x_node_colors: Optional[NodeColors] = None,
+    x_node_xy: Optional[NodeXY] = None,
 ) -> List[Dict[str, Any]]:
     """Resolve one X-hourglass in one active term; do not expand W."""
     successors: List[Dict[str, Any]] = []
@@ -1490,6 +1967,7 @@ def choose_x_resolution_successors(
             state = {
                 "active": next_active,
                 "discharged": next_discharged,
+                "expanded_relation": "wrench",
                 "expanded_side": "X",
                 "expanded_hourglass": [int(hg["white"]), int(hg["black"])],
                 "score": score_pair_state(
@@ -1501,6 +1979,37 @@ def choose_x_resolution_successors(
                 ),
             }
             successors.append(state)
+        for match in detect_figure43_moves(term["x_adj"], term["x_remaining"], x_node_colors, x_node_xy):
+            try:
+                children = expand_pair_term_by_figure43(term, "X", match)
+            except ValueError:
+                continue
+            next_terms = active[:term_idx] + active[term_idx + 1 :] + children
+            next_terms = consolidate_pair_terms(next_terms)
+            next_active, newly_discharged = discharge_pair_terms_by_common_fork(
+                next_terms,
+                x_boundary_labels,
+                w_boundary_labels,
+                allowed_forks,
+            )
+            next_discharged = discharged + newly_discharged
+            successors.append(
+                {
+                    "active": next_active,
+                    "discharged": next_discharged,
+                    "expanded_relation": "figure43",
+                    "expanded_side": "X",
+                    "expanded_rule": match["rule"],
+                    "expanded_vertices": [int(v) for v in match["vertices_top_right_bottom_left"]],
+                    "score": score_pair_state(
+                        next_active,
+                        next_discharged,
+                        x_boundary_labels,
+                        w_boundary_labels,
+                        allowed_forks,
+                    ),
+                }
+            )
     return successors
 
 
@@ -1588,6 +2097,10 @@ def prove_pair_value_by_wrench_forks_complete(
     allowed_forks: Optional[Set[frozenset[int]]] = None,
     beam_width: int = 500,
     max_steps: Optional[int] = None,
+    x_node_colors: Optional[NodeColors] = None,
+    x_node_xy: Optional[NodeXY] = None,
+    w_node_colors: Optional[NodeColors] = None,
+    w_node_xy: Optional[NodeXY] = None,
 ) -> Dict[str, Any]:
     """Evaluate a pair by continuing wrench expansion after guided stalls.
 
@@ -1669,6 +2182,10 @@ def prove_pair_value_by_wrench_forks_complete(
                     w_boundary_labels,
                     allow_w_wrench=allow_w_wrench,
                     allowed_forks=allowed_forks,
+                    x_node_colors=x_node_colors,
+                    x_node_xy=x_node_xy,
+                    w_node_colors=w_node_colors,
+                    w_node_xy=w_node_xy,
                 )
             )
         if not candidates:
@@ -1712,6 +2229,9 @@ def prove_pair_value_by_wrench_forks_complete(
                 "remaining_hourglasses": pair_state_remaining_hourglasses(beam[0]),
                 "expanded_side": beam[0].get("expanded_side"),
                 "expanded_hourglass": beam[0].get("expanded_hourglass"),
+                "expanded_relation": beam[0].get("expanded_relation"),
+                "expanded_rule": beam[0].get("expanded_rule"),
+                "expanded_vertices": beam[0].get("expanded_vertices"),
             }
         )
 
@@ -1742,6 +2262,10 @@ def prove_pair_value_by_x_component_coloring(
     x_beam_width: int = 500,
     guided_steps: Optional[int] = None,
     x_resolution_steps: Optional[int] = None,
+    x_node_colors: Optional[NodeColors] = None,
+    x_node_xy: Optional[NodeXY] = None,
+    w_node_colors: Optional[NodeColors] = None,
+    w_node_xy: Optional[NodeXY] = None,
 ) -> Dict[str, Any]:
     """Guided wrench/fork simplification, then X-component coloring.
 
@@ -1809,6 +2333,10 @@ def prove_pair_value_by_x_component_coloring(
                     w_boundary_labels,
                     allow_w_wrench=allow_w_wrench,
                     allowed_forks=allowed_forks,
+                    x_node_colors=x_node_colors,
+                    x_node_xy=x_node_xy,
+                    w_node_colors=w_node_colors,
+                    w_node_xy=w_node_xy,
                 )
             )
         if not candidates:
@@ -1829,6 +2357,9 @@ def prove_pair_value_by_x_component_coloring(
                 "w_remaining_hourglasses": sum(len(t["w_remaining"]) for t in beam[0]["active"]),
                 "expanded_side": beam[0].get("expanded_side"),
                 "expanded_hourglass": beam[0].get("expanded_hourglass"),
+                "expanded_relation": beam[0].get("expanded_relation"),
+                "expanded_rule": beam[0].get("expanded_rule"),
+                "expanded_vertices": beam[0].get("expanded_vertices"),
             }
         )
 
@@ -1881,6 +2412,8 @@ def prove_pair_value_by_x_component_coloring(
                     x_boundary_labels,
                     w_boundary_labels,
                     allowed_forks,
+                    x_node_colors=x_node_colors,
+                    x_node_xy=x_node_xy,
                 )
             )
         if not candidates:
@@ -1913,6 +2446,9 @@ def prove_pair_value_by_x_component_coloring(
                 "w_remaining_hourglasses": sum(len(t["w_remaining"]) for t in beam[0]["active"]),
                 "expanded_side": beam[0].get("expanded_side"),
                 "expanded_hourglass": beam[0].get("expanded_hourglass"),
+                "expanded_relation": beam[0].get("expanded_relation"),
+                "expanded_rule": beam[0].get("expanded_rule"),
+                "expanded_vertices": beam[0].get("expanded_vertices"),
             }
         )
 
@@ -2236,7 +2772,7 @@ def consistent_coloring_data(
             bnode = u if u in boundary_labels else v
             label = boundary_labels[bnode]
             if label not in boundary_color_by_label:
-                return 0
+                return {"count": 0, "sample_edge_colors": [], "sample_hourglass_colors": []}
             fixed[idx] = int(boundary_color_by_label[label])
 
     colors = [0] * len(edges)
@@ -2246,7 +2782,7 @@ def consistent_coloring_data(
     internal_vertices = [n for n in adj if n not in boundary_labels]
     for vertex in internal_vertices:
         if len(incident_edges[vertex]) != r:
-            return 0
+            return {"count": 0, "sample_edge_colors": [], "sample_hourglass_colors": []}
 
     remaining_edges = [idx for idx in range(len(edges)) if idx not in fixed]
     # Branch on the most constrained edges first: internal-internal edges usually

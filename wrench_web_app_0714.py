@@ -1027,15 +1027,17 @@ def reconstruct_run(x_path: Path, w_path: Path, proof: Dict[str, Any]):
     x_hgs = wrench.sort_hourglasses_by_boundary_distance(x_adj, x_bounds, x_hgs)
     w_hgs = wrench.sort_hourglasses_by_boundary_distance(w_adj, w_bounds, w_hgs)
 
-    def move_key(move: Dict[str, Any]) -> Tuple[str, Tuple[int, int], str]:
+    def move_key(move: Dict[str, Any]) -> Tuple[str, str, Tuple[int, ...], str]:
+        local_piece = move.get("hourglass", move.get("vertices", []))
         return (
+            str(move.get("phase", "wrench")),
             str(move.get("side", "X")),
-            tuple(sorted(int(x) for x in move.get("hourglass", []))),
+            tuple(sorted(int(x) for x in local_piece)),
             str(move.get("smoothing", "")),
         )
 
     def same_hourglass(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
-        return move_key(a)[:2] == move_key(b)[:2]
+        return move_key(a)[:3] == move_key(b)[:3]
 
     def history_matches(history: List[Dict[str, Any]], prefix: List[Dict[str, Any]]) -> bool:
         if len(history) < len(prefix):
@@ -1043,7 +1045,15 @@ def reconstruct_run(x_path: Path, w_path: Path, proof: Dict[str, Any]):
         return [move_key(m) for m in history[: len(prefix)]] == [move_key(m) for m in prefix]
 
     def opposite_smoothing(smoothing: str) -> str:
-        return "parallel" if smoothing == "crossing" else "crossing"
+        if smoothing == "crossing":
+            return "parallel"
+        if smoothing == "parallel":
+            return "crossing"
+        if smoothing == "horizontal":
+            return "vertical"
+        if smoothing == "vertical":
+            return "horizontal"
+        return smoothing
 
     def sibling_outcome(prefix: List[Dict[str, Any]], continue_move: Dict[str, Any]) -> Dict[str, Any]:
         sibling_prefix = list(prefix) + [
@@ -1099,18 +1109,37 @@ def reconstruct_run(x_path: Path, w_path: Path, proof: Dict[str, Any]):
     current_xh, current_wh = x_hgs, w_hgs
     for idx, continue_move in enumerate(active_history):
         side = continue_move.get("side", "X")
-        selected = tuple(sorted(int(x) for x in continue_move["hourglass"]))
-        hgs = current_xh if side == "X" else current_wh
-        hg = next(
-            h
-            for h in hgs
-            if tuple(sorted((int(h["white"]), int(h["black"])))) == selected
-        )
+        is_figure43 = continue_move.get("phase") == "figure43"
+        selected = tuple(sorted(int(x) for x in continue_move.get("hourglass", continue_move.get("vertices", []))))
+        hg = None
+        if not is_figure43:
+            hgs = current_xh if side == "X" else current_wh
+            hg = next(
+                h
+                for h in hgs
+                if tuple(sorted((int(h["white"]), int(h["black"])))) == selected
+            )
         killed = sibling_outcome(active_history[:idx], continue_move)
         sibling_smoothing = opposite_smoothing(continue_move["smoothing"])
 
         def branch(smoothing: str):
-            if side == "X":
+            if is_figure43:
+                match = {
+                    "rule": continue_move["rule"],
+                    "vertices_top_right_bottom_left": [int(v) for v in continue_move["vertices"]],
+                }
+                if side == "X":
+                    bx, bxh = wrench.apply_figure43_move(current_x, current_xh, match, smoothing)
+                    bw, bwh = current_w, current_wh
+                    new_x = edge_set(bx) - edge_set(current_x)
+                    new_w = set()
+                else:
+                    bx, bxh = current_x, current_xh
+                    bw, bwh = wrench.apply_figure43_move(current_w, current_wh, match, smoothing)
+                    new_x = set()
+                    new_w = edge_set(bw) - edge_set(current_w)
+            elif side == "X":
+                assert hg is not None
                 bx = wrench.smooth_one_hourglass(current_x, hg, smoothing)
                 bw = current_w
                 bxh = wrench.remaining_after_move(current_xh, hg)
@@ -1118,6 +1147,7 @@ def reconstruct_run(x_path: Path, w_path: Path, proof: Dict[str, Any]):
                 new_x = edge_set(bx) - edge_set(current_x)
                 new_w = set()
             else:
+                assert hg is not None
                 bx = current_x
                 bw = wrench.smooth_one_hourglass(current_w, hg, smoothing)
                 bxh = current_xh
@@ -1159,10 +1189,12 @@ def reconstruct_run(x_path: Path, w_path: Path, proof: Dict[str, Any]):
     return x_graph, w_graph, x_bounds, w_bounds, steps, current_x, current_w, current_xh, current_wh, active_history
 
 
-def move_key_for_display(move: Dict[str, Any]) -> Tuple[str, Tuple[int, int], str]:
+def move_key_for_display(move: Dict[str, Any]) -> Tuple[str, str, Tuple[int, ...], str]:
+    local_piece = move.get("hourglass", move.get("vertices", []))
     return (
+        str(move.get("phase", "wrench")),
         str(move.get("side", "X")),
-        tuple(sorted(int(x) for x in move.get("hourglass", []))),
+        tuple(sorted(int(x) for x in local_piece)),
         str(move.get("smoothing", "")),
     )
 
@@ -1267,13 +1299,14 @@ def move_sequence_table(history: List[Dict[str, Any]]) -> str:
         multiplier = int(move.get("coefficient_multiplier", wrench.move_multiplier(smoothing)))
         running_coeff *= multiplier
         phase = str(move.get("phase", "main_search"))
-        phase_label = "W fallback" if phase == "w_expansion_fallback" else "main search"
+        phase_label = "Figure 43" if phase == "figure43" else ("W fallback" if phase == "w_expansion_fallback" else "main search")
+        target = move.get("hourglass", move.get("vertices", []))
         rows.append(
             "<tr>"
             f"<td>{idx}</td>"
             f"<td>{html.escape(phase_label)}</td>"
             f"<td>{html.escape(str(move.get('side', '')))}</td>"
-            f"<td>{html.escape(str(move.get('hourglass', [])))}</td>"
+            f"<td>{html.escape(str(target))}</td>"
             f"<td>{html.escape(smoothing)}</td>"
             f"<td>{multiplier:+d}</td>"
             f"<td>{running_coeff:+d}</td>"
@@ -1282,7 +1315,7 @@ def move_sequence_table(history: List[Dict[str, Any]]) -> str:
     return f"""
     <table class="step-table branch-moves">
       <thead>
-        <tr><th>#</th><th>phase</th><th>web</th><th>hourglass</th><th>skein branch</th><th>sign</th><th>running coeff</th></tr>
+        <tr><th>#</th><th>phase</th><th>web</th><th>local piece</th><th>branch</th><th>sign</th><th>running coeff</th></tr>
       </thead>
       <tbody>{''.join(rows)}</tbody>
     </table>
@@ -1388,19 +1421,21 @@ def branch_move_picture(
     except Exception as exc:  # noqa: BLE001 - diagnostic display only.
         return f'<p class="muted">Could not replay this move for display: {html.escape(str(exc))}</p>'
 
+    is_figure43 = move.get("phase") == "figure43"
     selected = tuple(sorted(int(x) for x in move.get("hourglass", [])))
+    local_piece = move.get("vertices", list(selected))
     side = str(move.get("side", ""))
     smoothing = str(move.get("smoothing", ""))
     phase = str(move.get("phase", "main_search"))
-    phase_label = "W fallback" if phase == "w_expansion_fallback" else "main search"
+    phase_label = "Figure 43" if phase == "figure43" else ("W fallback" if phase == "w_expansion_fallback" else "main search")
     new_x = edge_set(after_x) - edge_set(before_x)
     new_w = edge_set(after_w) - edge_set(before_w)
     return f"""
     <div class="branch-move-picture">
-      <h4>Move {move_index}: {html.escape(phase_label)} applies {html.escape(side)} hourglass {html.escape(str(list(selected)))} as {html.escape(smoothing)}</h4>
+      <h4>Move {move_index}: {html.escape(phase_label)} applies {html.escape(side)} {'Figure 43 piece' if is_figure43 else 'hourglass'} {html.escape(str(local_piece))} as {html.escape(smoothing)}</h4>
       <div class="grid four">
-        {draw_web_svg('Before W', w_graph, before_w, before_wh, selected_hg=selected if side == 'W' else None, size=250)}
-        {draw_web_svg('Before X', x_graph, before_x, before_xh, selected_hg=selected if side == 'X' else None, size=250)}
+        {draw_web_svg('Before W', w_graph, before_w, before_wh, selected_hg=None if is_figure43 else (selected if side == 'W' else None), size=250)}
+        {draw_web_svg('Before X', x_graph, before_x, before_xh, selected_hg=None if is_figure43 else (selected if side == 'X' else None), size=250)}
         {draw_web_svg('After W', w_graph, after_w, after_wh, edge_colors={e: '#2586d8' for e in new_w}, size=250)}
         {draw_web_svg('After X', x_graph, after_x, after_xh, edge_colors={e: '#2586d8' for e in new_x}, size=250)}
       </div>
@@ -1450,20 +1485,22 @@ def branch_process_pictures(
             )
             continue
 
+        is_figure43 = move.get("phase") == "figure43"
         selected = tuple(sorted(int(x) for x in move.get("hourglass", [])))
+        local_piece = move.get("vertices", list(selected))
         side = str(move.get("side", ""))
         smoothing = str(move.get("smoothing", ""))
         phase = str(move.get("phase", "main_search"))
-        phase_label = "W fallback" if phase == "w_expansion_fallback" else "main search"
+        phase_label = "Figure 43" if phase == "figure43" else ("W fallback" if phase == "w_expansion_fallback" else "main search")
         new_x = edge_set(after_x) - edge_set(before_x)
         new_w = edge_set(after_w) - edge_set(before_w)
         blocks.append(
             f"""
             <div class="branch-move-picture">
-              <h4>Move {idx}: {html.escape(phase_label)} applies {html.escape(side)} hourglass {html.escape(str(list(selected)))} as {html.escape(smoothing)}</h4>
+              <h4>Move {idx}: {html.escape(phase_label)} applies {html.escape(side)} {'Figure 43 piece' if is_figure43 else 'hourglass'} {html.escape(str(local_piece))} as {html.escape(smoothing)}</h4>
               <div class="grid four">
-                {draw_web_svg('Before W', w_graph, before_w, before_wh, selected_hg=selected if side == 'W' else None, size=250)}
-                {draw_web_svg('Before X', x_graph, before_x, before_xh, selected_hg=selected if side == 'X' else None, size=250)}
+                {draw_web_svg('Before W', w_graph, before_w, before_wh, selected_hg=None if is_figure43 else (selected if side == 'W' else None), size=250)}
+                {draw_web_svg('Before X', x_graph, before_x, before_xh, selected_hg=None if is_figure43 else (selected if side == 'X' else None), size=250)}
                 {draw_web_svg('After W', w_graph, after_w, after_wh, edge_colors={e: '#2586d8' for e in new_w}, size=250)}
                 {draw_web_svg('After X', x_graph, after_x, after_xh, edge_colors={e: '#2586d8' for e in new_x}, size=250)}
               </div>
@@ -1490,13 +1527,14 @@ def move_sequence_table_lazy(history: List[Dict[str, Any]], branch_id: str) -> s
         multiplier = int(move.get("coefficient_multiplier", wrench.move_multiplier(smoothing)))
         running_coeff *= multiplier
         phase = str(move.get("phase", "main_search"))
-        phase_label = "W fallback" if phase == "w_expansion_fallback" else "main search"
+        phase_label = "Figure 43" if phase == "figure43" else ("W fallback" if phase == "w_expansion_fallback" else "main search")
+        target = move.get("hourglass", move.get("vertices", []))
         rows.append(
             "<tr>"
             f"<td>{idx}</td>"
             f"<td>{html.escape(phase_label)}</td>"
             f"<td>{html.escape(str(move.get('side', '')))}</td>"
-            f"<td>{html.escape(str(move.get('hourglass', [])))}</td>"
+            f"<td>{html.escape(str(target))}</td>"
             f"<td>{html.escape(smoothing)}</td>"
             f"<td>{multiplier:+d}</td>"
             f"<td>{running_coeff:+d}</td>"
@@ -1506,7 +1544,7 @@ def move_sequence_table_lazy(history: List[Dict[str, Any]], branch_id: str) -> s
     return f"""
     <table class="step-table branch-moves">
       <thead>
-        <tr><th>#</th><th>phase</th><th>web</th><th>hourglass</th><th>skein branch</th><th>sign</th><th>running coeff</th><th>pictures</th></tr>
+        <tr><th>#</th><th>phase</th><th>web</th><th>local piece</th><th>branch</th><th>sign</th><th>running coeff</th><th>pictures</th></tr>
       </thead>
       <tbody>{''.join(rows)}</tbody>
     </table>
@@ -1674,6 +1712,8 @@ def compute_pair_context(params: Dict[str, str]) -> Dict[str, Any]:
 
     x_adj, x_bounds, x_hgs = wrench.parse_web(x_path)
     w_adj, w_bounds, w_hgs = wrench.parse_web(w_path)
+    x_node_colors, x_node_xy = wrench.parse_web_metadata(x_path)
+    w_node_colors, w_node_xy = wrench.parse_web_metadata(w_path)
     x_hgs = wrench.sort_hourglasses_by_boundary_distance(x_adj, x_bounds, x_hgs)
     w_hgs = wrench.sort_hourglasses_by_boundary_distance(w_adj, w_bounds, w_hgs)
     proof = wrench.prove_pair_value_complete_pipeline(
@@ -1689,6 +1729,10 @@ def compute_pair_context(params: Dict[str, str]) -> Dict[str, Any]:
         guided_steps=max_steps,
         x_resolution_steps=None,
         max_w_expansions_per_branch=16,
+        x_node_colors=x_node_colors,
+        x_node_xy=x_node_xy,
+        w_node_colors=w_node_colors,
+        w_node_xy=w_node_xy,
     )
     if max_steps is not None and proof.get("active_term_count", 0):
         auto_proof = wrench.prove_pair_value_complete_pipeline(
@@ -1704,6 +1748,10 @@ def compute_pair_context(params: Dict[str, str]) -> Dict[str, Any]:
             guided_steps=None,
             x_resolution_steps=None,
             max_w_expansions_per_branch=16,
+            x_node_colors=x_node_colors,
+            x_node_xy=x_node_xy,
+            w_node_colors=w_node_colors,
+            w_node_xy=w_node_xy,
         )
         auto_proof["auto_continued_from_step_cap"] = max_steps
         proof = auto_proof
