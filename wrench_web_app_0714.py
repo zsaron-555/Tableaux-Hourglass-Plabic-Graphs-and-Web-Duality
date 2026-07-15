@@ -1708,7 +1708,7 @@ def compute_pair_context(params: Dict[str, str]) -> Dict[str, Any]:
     max_steps_raw = params.get("max_steps", "").strip()
     max_steps = None if max_steps_raw in {"", "auto", "8"} else int(max_steps_raw)
     beam_width = int(params.get("beam_width", "120") or "120")
-    allow_w = params.get("allow_w", "1") == "1"
+    allow_w = params.get("allow_w", "0") == "1"
 
     x_adj, x_bounds, x_hgs = wrench.parse_web(x_path)
     w_adj, w_bounds, w_hgs = wrench.parse_web(w_path)
