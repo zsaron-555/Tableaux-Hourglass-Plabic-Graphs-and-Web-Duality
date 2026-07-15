@@ -1,0 +1,236 @@
+{
+  "schema": "bcgmmw_lemma49_local_exemplars_v1",
+  "source": "BCGMMW Lemma 4.9, page 15, items (a)-(m)",
+  "convention": {
+    "purpose": "symbolic local boundary-window snippets for zero-pattern recognition",
+    "node_ids": "b* are boundary vertices in cyclic order; w* are SL4-side internal vertices; x* are SL3-side internal vertices",
+    "edge_types": {
+      "ordinary": "ordinary black web edge",
+      "hourglass": "two-strand hourglass between the two listed endpoints"
+    },
+    "status": "manual symbolic translation from the displayed diagrams; branch signs are used by the pairing engine; red tags, when present, impose no edge, color, or shape restriction"
+  },
+  "items": [
+    {
+      "item": "a",
+      "W": {
+        "boundary": ["b1", "b2", "b3", "b4"],
+        "internal": ["w1", "w2", "w3", "w4", "w5"],
+        "ordinary_edges": [["b1", "w1"], ["b2", "w2"], ["b3", "w3"], ["b4", "w4"], ["w1", "w2"], ["w2", "w3"], ["w3", "w4"], ["w1", "w5"], ["w4", "w5"]],
+        "hourglasses": [["w5", "w2"]],
+        "features": ["central vertical hourglass over lower boundary arc", "two top boundary legs"]
+      },
+      "X": {
+        "boundary": ["b1", "b2", "b3", "b4"],
+        "internal": ["x1", "x2", "x3"],
+        "ordinary_edges": [["b1", "x1"], ["b2", "x1"], ["x1", "x2"], ["x1", "x3"], ["x2", "b3"], ["x3", "b4"], ["x2", "x3"]],
+        "hourglasses": [],
+        "features": ["single top apex feeding two lower white vertices"]
+      }
+    },
+    {
+      "item": "b",
+      "W": {
+        "boundary": ["b1", "b2", "b3", "b4", "b5"],
+        "internal": ["w1", "w2", "w3", "w4", "w5", "w6"],
+        "ordinary_edges": [["b1", "w1"], ["b2", "w2"], ["b3", "w3"], ["b4", "w4"], ["b5", "w5"], ["w1", "w2"], ["w2", "w3"], ["w3", "w4"], ["w4", "w5"], ["w3", "w6"], ["w6", "w5"]],
+        "hourglasses": [["w1", "w6"]],
+        "features": ["left upper hourglass", "central vertical edge to lower arc"]
+      },
+      "X": {
+        "boundary": ["b1", "b2", "b3", "b4", "b5"],
+        "internal": ["x1", "x2", "x3", "x4", "x5"],
+        "ordinary_edges": [["b1", "x1"], ["x1", "b2"], ["x1", "x3"], ["b3", "x3"], ["x3", "x4"], ["x4", "b4"], ["x4", "x5"], ["x5", "b5"], ["x2", "x3"], ["x2", "x4"]],
+        "hourglasses": [],
+        "features": ["two side triangular pockets", "central top Y"]
+      }
+    },
+    {
+      "item": "c",
+      "W": {
+        "boundary": ["b1", "b2", "b3", "b4", "b5"],
+        "internal": ["w1", "w2", "w3", "w4"],
+        "ordinary_edges": [["b1", "w1"], ["b2", "w1"], ["w1", "w2"], ["w2", "b3"], ["w2", "b4"], ["w2", "w3"], ["w3", "b5"], ["w3", "w4"], ["w4", "b1"], ["w4", "b5"]],
+        "hourglasses": [],
+        "features": ["large top crossing cap", "central small triangle on lower arc"]
+      },
+      "X": {
+        "boundary": ["b1", "b2", "b3", "b4", "b5"],
+        "internal": ["x1", "x2", "x3", "x4", "x5", "x6"],
+        "ordinary_edges": [["b1", "x1"], ["x1", "b2"], ["x1", "x3"], ["x2", "x3"], ["x2", "x4"], ["x3", "b3"], ["x4", "b4"], ["x4", "x5"], ["x5", "b5"], ["x5", "x6"], ["x6", "b1"]],
+        "hourglasses": [],
+        "features": ["three upward boundary legs", "two side triangular pockets"]
+      }
+    },
+    {
+      "item": "d",
+      "W": {
+        "boundary": ["b1", "b2", "b3", "b4", "b5"],
+        "internal": ["w1", "w2", "w3", "w4", "w5", "w6"],
+        "ordinary_edges": [["b1", "w1"], ["w1", "b2"], ["w1", "w2"], ["w2", "w3"], ["w3", "b3"], ["w3", "w4"], ["w4", "b4"], ["w4", "w5"], ["w5", "b5"], ["w5", "w6"], ["w6", "b1"]],
+        "hourglasses": [["w1", "w2"], ["w3", "w4"]],
+        "features": ["two upper side hourglasses", "right crossing cap"]
+      },
+      "X": {
+        "boundary": ["b1", "b2", "b3", "b4", "b5"],
+        "internal": ["x1", "x2"],
+        "ordinary_edges": [["b1", "x1"], ["x1", "b3"], ["x1", "b5"], ["x2", "b2"], ["x2", "b3"], ["x2", "b4"]],
+        "hourglasses": [],
+        "features": ["single central triangle under a large arch"]
+      }
+    },
+    {
+      "item": "e",
+      "W": {
+        "boundary": ["b1", "b2", "b3", "b4", "b5"],
+        "internal": ["w1", "w2", "w3", "w4", "w5", "w6", "w7"],
+        "ordinary_edges": [["b1", "w1"], ["w1", "b2"], ["w1", "w2"], ["w2", "w3"], ["w3", "b3"], ["w3", "w4"], ["w4", "b4"], ["w4", "w5"], ["w5", "b5"], ["w2", "w6"], ["w6", "w7"], ["w7", "w5"]],
+        "hourglasses": [["w1", "w2"], ["w4", "w5"]],
+        "features": ["symmetric left and right side hourglasses", "central inverted V"]
+      },
+      "X": {
+        "boundary": ["b1", "b2", "b3", "b4", "b5"],
+        "internal": ["x1", "x2", "x3", "x4", "x5"],
+        "ordinary_edges": [["b1", "x1"], ["x1", "b2"], ["x1", "x2"], ["x2", "x3"], ["x3", "b3"], ["x3", "x4"], ["x4", "b4"], ["x4", "x5"], ["x5", "b5"], ["x2", "x5"]],
+        "hourglasses": [],
+        "features": ["two side triangles joined through central top vertex"]
+      }
+    },
+    {
+      "item": "f",
+      "W": {
+        "boundary": ["b1", "b2", "b3", "b4", "b5", "b6"],
+        "internal": ["w1", "w2", "w3", "w4", "w5", "w6"],
+        "ordinary_edges": [["b1", "w1"], ["w1", "b2"], ["w1", "w2"], ["w2", "b3"], ["w2", "w3"], ["w3", "b4"], ["w3", "w4"], ["w4", "b5"], ["w4", "w5"], ["w5", "b6"], ["w5", "w6"], ["w6", "b1"]],
+        "hourglasses": [["w1", "w2"], ["w4", "w5"]],
+        "features": ["two vertical side hourglasses in a rectangular strip"]
+      },
+      "X": {
+        "boundary": ["b1", "b2", "b3", "b4", "b5", "b6"],
+        "internal": ["x1", "x2", "x3", "x4", "x5", "x6"],
+        "ordinary_edges": [["b1", "x1"], ["x1", "b2"], ["x1", "x2"], ["x2", "b3"], ["x2", "x3"], ["x3", "b4"], ["x3", "x4"], ["x4", "b5"], ["x4", "x5"], ["x5", "b6"], ["x5", "x6"], ["x6", "b1"]],
+        "hourglasses": [],
+        "features": ["rectangular strip with side pockets"]
+      }
+    },
+    {
+      "item": "g",
+      "W": {
+        "boundary": ["b1", "b2", "b3", "b4", "b5", "b6"],
+        "internal": ["w1", "w2", "w3", "w4", "w5", "w6", "w7"],
+        "ordinary_edges": [["b1", "w1"], ["w1", "b2"], ["w1", "w2"], ["w2", "b3"], ["w2", "w3"], ["w3", "b4"], ["w3", "w4"], ["w4", "b5"], ["w4", "w5"], ["w5", "b6"], ["w6", "w7"], ["w7", "w5"]],
+        "hourglasses": [["w1", "w6"], ["w4", "w5"]],
+        "features": ["left top horizontal hourglass", "right vertical hourglass"]
+      },
+      "X": {
+        "boundary": ["b1", "b2", "b3", "b4", "b5", "b6"],
+        "internal": ["x1", "x2", "x3", "x4", "x5"],
+        "ordinary_edges": [["b1", "x1"], ["x1", "b2"], ["x1", "x2"], ["x2", "b3"], ["x2", "x3"], ["x3", "b4"], ["x3", "x4"], ["x4", "b5"], ["x4", "x5"], ["x5", "b6"], ["x2", "x5"]],
+        "hourglasses": [],
+        "features": ["rectangular strip with one central triangular pocket"]
+      }
+    },
+    {
+      "item": "h",
+      "W": {
+        "boundary": ["b1", "b2", "b3", "b4"],
+        "internal": ["w1", "w2", "w3", "w4"],
+        "ordinary_edges": [["b1", "w1"], ["w1", "b2"], ["w1", "w2"], ["w2", "b3"], ["w2", "w3"], ["w3", "b4"], ["w3", "w4"], ["w4", "b1"]],
+        "hourglasses": [["w1", "w2"]],
+        "features": ["single upper-left hourglass adjacent to top apex"]
+      },
+      "X": {
+        "boundary": ["b1", "b2", "b3", "b4"],
+        "internal": ["x1", "x2", "x3", "x4"],
+        "ordinary_edges": [["b1", "x1"], ["x1", "b2"], ["x1", "x2"], ["x2", "b3"], ["x2", "x3"], ["x3", "b4"], ["x3", "x4"], ["x4", "b1"]],
+        "hourglasses": [],
+        "features": ["two adjacent top legs with central vertical"]
+      }
+    },
+    {
+      "item": "i",
+      "W": {
+        "boundary": ["b1", "b2", "b3", "b4", "b5"],
+        "internal": ["w1", "w2", "w3", "w4", "w5", "w6"],
+        "ordinary_edges": [["b1", "w1"], ["w1", "b2"], ["w1", "w2"], ["w2", "b3"], ["w2", "w3"], ["w3", "b4"], ["w3", "w4"], ["w4", "b5"], ["w4", "w5"], ["w5", "b1"], ["w5", "w6"]],
+        "hourglasses": [["w2", "w6"]],
+        "features": ["central vertical hourglass inside large triangular cap"]
+      },
+      "X": {
+        "boundary": ["b1", "b2", "b3", "b4", "b5"],
+        "internal": ["x1", "x2", "x3", "x4", "x5", "x6"],
+        "ordinary_edges": [["b1", "x1"], ["x1", "b2"], ["x1", "x2"], ["x2", "b3"], ["x2", "x3"], ["x3", "b4"], ["x3", "x4"], ["x4", "b5"], ["x4", "x5"], ["x5", "b1"], ["x5", "x6"]],
+        "hourglasses": [],
+        "features": ["two side triangular pockets with three top legs"]
+      }
+    },
+    {
+      "item": "j",
+      "W": {
+        "boundary": ["b1", "b2", "b3", "b4", "b5"],
+        "internal": ["w1", "w2", "w3", "w4"],
+        "ordinary_edges": [["b1", "w1"], ["w1", "b2"], ["w1", "w2"], ["w2", "b3"], ["w2", "b4"], ["w2", "w3"], ["w3", "b5"], ["w3", "w4"], ["w4", "b1"]],
+        "hourglasses": [],
+        "features": ["large crossed top cap over two side pockets"]
+      },
+      "X": {
+        "boundary": ["b1", "b2", "b3", "b4", "b5"],
+        "internal": ["x1", "x2", "x3", "x4", "x5", "x6"],
+        "ordinary_edges": [["b1", "x1"], ["x1", "b2"], ["x1", "x2"], ["x2", "b3"], ["x2", "x3"], ["x3", "b4"], ["x3", "x4"], ["x4", "b5"], ["x4", "x5"], ["x5", "b1"], ["x2", "x6"], ["x6", "x4"]],
+        "hourglasses": [],
+        "features": ["central square/diamond over lower triangle"]
+      }
+    },
+    {
+      "item": "k",
+      "W": {
+        "boundary": ["b1", "b2", "b3", "b4", "b5"],
+        "internal": ["w1", "w2", "w3", "w4", "w5"],
+        "ordinary_edges": [["b1", "w1"], ["w1", "b2"], ["w1", "w2"], ["w2", "b3"], ["w2", "w3"], ["w3", "b4"], ["w3", "w4"], ["w4", "b5"], ["w4", "w5"], ["w5", "b1"]],
+        "hourglasses": [["w1", "w2"], ["w3", "w4"]],
+        "features": ["two symmetric upper side hourglasses"]
+      },
+      "X": {
+        "boundary": ["b1", "b2", "b3", "b4", "b5"],
+        "internal": ["x1", "x2"],
+        "ordinary_edges": [["b1", "x1"], ["x1", "b3"], ["x1", "b5"], ["x2", "b2"], ["x2", "b3"], ["x2", "b4"]],
+        "hourglasses": [],
+        "features": ["single central triangle under large arch"]
+      }
+    },
+    {
+      "item": "l",
+      "W": {
+        "boundary": ["b1", "b2", "b3", "b4", "b5", "b6"],
+        "internal": ["w1", "w2", "w3", "w4", "w5", "w6"],
+        "ordinary_edges": [["b1", "w1"], ["w1", "b2"], ["w1", "w2"], ["w2", "b3"], ["w2", "w3"], ["w3", "b4"], ["w3", "w4"], ["w4", "b5"], ["w4", "w5"], ["w5", "b6"], ["w5", "w6"], ["w6", "b1"]],
+        "hourglasses": [],
+        "features": ["two upper crossing caps with two side triangular pockets"]
+      },
+      "X": {
+        "boundary": ["b1", "b2", "b3", "b4", "b5", "b6"],
+        "internal": ["x1", "x2", "x3", "x4"],
+        "ordinary_edges": [["b1", "x1"], ["x1", "b2"], ["x1", "x2"], ["x2", "b3"], ["x2", "b4"], ["x2", "x3"], ["x3", "b5"], ["x3", "x4"], ["x4", "b6"], ["x4", "b1"]],
+        "hourglasses": [],
+        "features": ["wide nested arch with central lower triangle"]
+      }
+    },
+    {
+      "item": "m",
+      "W": {
+        "boundary": ["b1", "b2", "b3", "b4", "b5", "b6", "b7", "b8"],
+        "internal": ["w1", "w2", "w3", "w4", "w5", "w6", "w7", "w8"],
+        "ordinary_edges": [["b1", "w1"], ["w1", "b2"], ["w1", "w2"], ["w2", "b3"], ["w2", "w3"], ["w3", "b4"], ["w3", "w4"], ["w4", "b5"], ["w4", "w5"], ["w5", "b6"], ["w5", "w6"], ["w6", "b7"], ["w6", "w7"], ["w7", "b8"], ["w7", "w8"], ["w8", "b1"]],
+        "hourglasses": [["w1", "w2"], ["w6", "w7"]],
+        "features": ["long boundary window with symmetric side hourglasses and central V"]
+      },
+      "X": {
+        "boundary": ["b1", "b2", "b3", "b4", "b5", "b6", "b7", "b8"],
+        "internal": ["x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8"],
+        "ordinary_edges": [["b1", "x1"], ["x1", "b2"], ["x1", "x2"], ["x2", "b3"], ["x2", "x3"], ["x3", "b4"], ["x3", "x4"], ["x4", "b5"], ["x4", "x5"], ["x5", "b6"], ["x5", "x6"], ["x6", "b7"], ["x6", "x7"], ["x7", "b8"], ["x7", "x8"], ["x8", "b1"], ["x3", "x8"], ["x4", "x7"]],
+        "hourglasses": [],
+        "features": ["long strip with central square/diamond and side pockets"]
+      }
+    }
+  ]
+}
