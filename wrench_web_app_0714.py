@@ -1484,15 +1484,15 @@ def branch_move_picture(
     side = str(move.get("side", ""))
     smoothing = str(move.get("smoothing", ""))
     phase = str(move.get("phase", "main_search"))
-    phase_label = "Figure 43" if phase == "figure43" else ("W fallback" if phase == "w_expansion_fallback" else "main search")
+    phase_label = phase_display_label(phase)
     new_x = edge_set(after_x) - edge_set(before_x)
     new_w = edge_set(after_w) - edge_set(before_w)
     return f"""
     <div class="branch-move-picture">
-      <h4>Move {move_index}: {html.escape(phase_label)} applies {html.escape(side)} {'Figure 43 piece' if is_figure43 else 'hourglass'} {html.escape(str(local_piece))} as {html.escape(smoothing)}</h4>
+      <h4>Move {move_index}: {html.escape(phase_label)} applies {html.escape(side)} {move_piece_label(move)} {html.escape(str(local_piece))} as {html.escape(smoothing)}</h4>
       <div class="grid four">
-        {draw_web_svg('Before W', w_graph, before_w, before_wh, selected_hg=None if is_figure43 else (selected if side == 'W' else None), size=250)}
-        {draw_web_svg('Before X', x_graph, before_x, before_xh, selected_hg=None if is_figure43 else (selected if side == 'X' else None), size=250)}
+        {draw_web_svg('Before W', w_graph, before_w, before_wh, selected_hg=None if move.get("phase") in {"figure43", "antisymmetrizer"} else (selected if side == 'W' else None), size=250)}
+        {draw_web_svg('Before X', x_graph, before_x, before_xh, selected_hg=None if move.get("phase") in {"figure43", "antisymmetrizer"} else (selected if side == 'X' else None), size=250)}
         {draw_web_svg('After W', w_graph, after_w, after_wh, edge_colors={e: '#2586d8' for e in new_w}, size=250)}
         {draw_web_svg('After X', x_graph, after_x, after_xh, edge_colors={e: '#2586d8' for e in new_x}, size=250)}
       </div>
@@ -1548,16 +1548,16 @@ def branch_process_pictures(
         side = str(move.get("side", ""))
         smoothing = str(move.get("smoothing", ""))
         phase = str(move.get("phase", "main_search"))
-        phase_label = "Figure 43" if phase == "figure43" else ("W fallback" if phase == "w_expansion_fallback" else "main search")
+        phase_label = phase_display_label(phase)
         new_x = edge_set(after_x) - edge_set(before_x)
         new_w = edge_set(after_w) - edge_set(before_w)
         blocks.append(
             f"""
             <div class="branch-move-picture">
-              <h4>Move {idx}: {html.escape(phase_label)} applies {html.escape(side)} {'Figure 43 piece' if is_figure43 else 'hourglass'} {html.escape(str(local_piece))} as {html.escape(smoothing)}</h4>
+              <h4>Move {idx}: {html.escape(phase_label)} applies {html.escape(side)} {move_piece_label(move)} {html.escape(str(local_piece))} as {html.escape(smoothing)}</h4>
               <div class="grid four">
-                {draw_web_svg('Before W', w_graph, before_w, before_wh, selected_hg=None if is_figure43 else (selected if side == 'W' else None), size=250)}
-                {draw_web_svg('Before X', x_graph, before_x, before_xh, selected_hg=None if is_figure43 else (selected if side == 'X' else None), size=250)}
+                {draw_web_svg('Before W', w_graph, before_w, before_wh, selected_hg=None if move.get("phase") in {"figure43", "antisymmetrizer"} else (selected if side == 'W' else None), size=250)}
+                {draw_web_svg('Before X', x_graph, before_x, before_xh, selected_hg=None if move.get("phase") in {"figure43", "antisymmetrizer"} else (selected if side == 'X' else None), size=250)}
                 {draw_web_svg('After W', w_graph, after_w, after_wh, edge_colors={e: '#2586d8' for e in new_w}, size=250)}
                 {draw_web_svg('After X', x_graph, after_x, after_xh, edge_colors={e: '#2586d8' for e in new_x}, size=250)}
               </div>
@@ -1584,7 +1584,7 @@ def move_sequence_table_lazy(history: List[Dict[str, Any]], branch_id: str) -> s
         multiplier = int(move.get("coefficient_multiplier", wrench.move_multiplier(smoothing)))
         running_coeff *= multiplier
         phase = str(move.get("phase", "main_search"))
-        phase_label = "Figure 43" if phase == "figure43" else ("W fallback" if phase == "w_expansion_fallback" else "main search")
+        phase_label = phase_display_label(phase)
         target = move.get("hourglass", move.get("vertices", []))
         rows.append(
             "<tr>"
@@ -1624,6 +1624,26 @@ def terminal_branch_records(proof: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "raw": term,
             }
         )
+
+    direct_coloring_evaluations = list(proof.get("coloring_evaluations", []))
+    if direct_coloring_evaluations:
+        for idx, term in enumerate(direct_coloring_evaluations, start=1):
+            status = str(term.get("status", ""))
+            value = term.get("term_value")
+            records.append(
+                {
+                    "id": f"C{idx:03d}",
+                    "kind": "coloring",
+                    "status": "colored" if value is not None else "not computed",
+                    "coeff": term.get("coeff", ""),
+                    "value": value,
+                    "history": term.get("history", []),
+                    "forks": term.get("common_forks", []),
+                    "reason": term.get("reason", status),
+                    "coloring_count": term.get("coloring_count"),
+                    "raw": term,
+                }
+            )
 
     fallback = proof.get("w_expansion_fallback", {})
     fallback_evaluations = list(fallback.get("branch_evaluations", []))
@@ -1731,17 +1751,18 @@ def render_branch_ledger_section(
             "</tr>"
         )
 
-    computed = [record for record in records if record.get("value") is not None]
-    if computed:
+    contributing = [record for record in records if record.get("coloring_count") is not None]
+    if contributing:
         pieces = [
             f"({record.get('coeff')})*{record.get('coloring_count')}"
-            if record.get("coloring_count") is not None
-            else "0"
-            for record in computed
+            for record in contributing
         ]
-        combo = " + ".join(pieces).replace("+ (-", "- (")
+        total_value = sum(int(record.get("value") or 0) for record in contributing)
+        combo = (" + ".join(pieces).replace("+ (-", "- (") + f" = {total_value}")
+    elif any(record.get("value") == 0 for record in records):
+        combo = "0"
     else:
-        combo = "all displayed terminal branches currently have value 0 or no computed value"
+        combo = "all displayed terminal branches currently have no computed value"
 
     return f"""
     <section class="step branch-ledger">
@@ -1765,7 +1786,8 @@ def compute_pair_context(params: Dict[str, str]) -> Dict[str, Any]:
     max_steps_raw = params.get("max_steps", "").strip()
     max_steps = None if max_steps_raw in {"", "auto", "8"} else int(max_steps_raw)
     beam_width = int(params.get("beam_width", "120") or "120")
-    allow_w = params.get("allow_w", "0") == "1"
+
+    allow_w = False
 
 
     x_adj, x_bounds, x_hgs = wrench.parse_web(x_path)
@@ -2028,6 +2050,7 @@ def run_pair(params: Dict[str, str]) -> str:
         for idx, step in enumerate(steps, start=1):
             killed_forks = step["killed"].get("common_forks", [])
             sibling_status = step["killed"].get("status", "")
+            fork = killed_forks[0] if sibling_status in {"fork_killed", "continued_then_fork_killed"} and killed_forks else None
             if sibling_status == "fork_killed":
                 killed_title = "Killed branch by fork lemma"
                 killed_note = f"fork(s): {html.escape(str(killed_forks))}, coeff {html.escape(str(step['killed'].get('coeff')))}"
