@@ -34,6 +34,20 @@ NodeColors = Dict[int, str]
 NodeXY = Dict[int, Tuple[float, float]]
 
 APP_DIR = Path(__file__).resolve().parent
+VALUE_ONLY_MODE = os.environ.get("HG_VALUE_ONLY", "") == "1"
+
+
+def term_history(term: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if VALUE_ONLY_MODE:
+        return []
+    return term.get("history", [])
+
+
+def extend_history(term: Dict[str, Any], move: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if VALUE_ONLY_MODE:
+        return []
+    return term.get("history", []) + [move]
+
 DEFAULT_PROJECT_ROOTS = [
     Path(os.environ.get("PROBLEM3_ROOT", APP_DIR)).expanduser().resolve(),
     Path.cwd().resolve(),
@@ -139,13 +153,15 @@ def orient_hourglass_ports(
         key=lambda n: _dot_with_perp(left, n, perp, nodes),
         reverse=True,
     )
-    # The opposite endpoint sees the local picture from the other side of the
-    # hourglass. Reverse its perpendicular ordering so the local top/bottom
-    # names are paired consistently when the replacement strands cross the
-    # hourglass region.
+    # Use the same geometric perpendicular direction at both endpoints.
+    # Reversing the right endpoint here swaps the mathematical meanings of the
+    # two smoothings: the branch named ``crossing`` becomes top-to-top and the
+    # branch named ``parallel`` becomes top-to-bottom.  Keeping both endpoint
+    # orders geometric makes the names, pictures, and coefficients agree.
     right_sorted = sorted(
         right_neighbors,
         key=lambda n: _dot_with_perp(right, n, perp, nodes),
+        reverse=True,
     )
 
     ports = {
@@ -1029,7 +1045,7 @@ def consolidate_terms(terms: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "adj": term["adj"],
                 "remaining": term["remaining"],
                 "coeff": 0,
-                "history": term.get("history", []),
+                "history": term_history(term),
             }
         consolidated[key]["coeff"] += term["coeff"]
     return [term for term in consolidated.values() if term["coeff"] != 0]
@@ -1049,7 +1065,7 @@ def discharge_terms_by_fork(
                 {
                     "coeff": term["coeff"],
                     "common_forks": sorted([fork_to_list(f) for f in common]),
-                    "history": term.get("history", []),
+                    "history": term_history(term),
                     "reason": "fork_lemma",
                 }
             )
@@ -1091,7 +1107,7 @@ def expand_one_term_at_hourglass(term: Dict[str, Any], hg: Hourglass) -> List[Di
                 "adj": child_adj,
                 "remaining": child_remaining,
                 "coeff": term["coeff"] * move_multiplier(smoothing),
-                "history": term.get("history", []) + [move],
+                "history": extend_history(term, move),
             }
         )
     return children
@@ -1233,7 +1249,7 @@ def active_term_summary(
         "common_forks": sorted([fork_to_list(f) for f in common]),
         "all_forks": sorted([fork_to_list(f) for f in get_forks(term["adj"], boundary_labels)]),
         "remaining_hourglasses": len(term["remaining"]),
-        "history": term.get("history", []),
+        "history": term_history(term),
         "edges": [list(edge) for edge in get_edge_tuple(term["adj"])],
     }
 
@@ -1271,7 +1287,7 @@ def consolidate_pair_terms(terms: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "w_adj": term["w_adj"],
                 "w_remaining": term["w_remaining"],
                 "coeff": 0,
-                "history": term.get("history", []),
+                "history": term_history(term),
             }
         consolidated[key]["coeff"] += term["coeff"]
     return [term for term in consolidated.values() if term["coeff"] != 0]
@@ -1298,7 +1314,7 @@ def discharge_pair_terms_by_common_fork(
                 {
                     "coeff": term["coeff"],
                     "common_forks": sorted([fork_to_list(f) for f in common]),
-                    "history": term.get("history", []),
+                    "history": term_history(term),
                     "reason": "fork_lemma",
                 }
             )
@@ -1336,7 +1352,7 @@ def expand_pair_term(term: Dict[str, Any], side: str, hg: Hourglass) -> List[Dic
                 "w_adj": child_w_adj,
                 "w_remaining": child_w_remaining,
                 "coeff": term["coeff"] * move_multiplier(smoothing),
-                "history": term.get("history", []) + [move],
+                "history": extend_history(term, move),
             }
         )
     return children
@@ -1386,7 +1402,7 @@ def expand_pair_term_by_figure43(
                 "w_adj": child_w_adj,
                 "w_remaining": child_w_remaining,
                 "coeff": term["coeff"] * multiplier,
-                "history": term.get("history", []) + [move],
+                "history": extend_history(term, move),
             }
         )
     return children
@@ -1424,7 +1440,7 @@ def expand_pair_term_by_antisymmetrizer(
                 "w_adj": term["w_adj"],
                 "w_remaining": term["w_remaining"],
                 "coeff": term["coeff"] * multiplier,
-                "history": term.get("history", []) + [move],
+                "history": extend_history(term, move),
             }
         )
     return children
@@ -1593,7 +1609,7 @@ def evaluate_pair_state_by_coloring(
                 "reason": str(exc),
             }
         evaluation["coeff"] = term["coeff"]
-        evaluation["history"] = term.get("history", [])
+        evaluation["history"] = term_history(term)
         evaluation["common_forks"] = []
         evaluation["source_adj"] = term["x_adj"]
         evaluation["source_hourglasses"] = term["x_remaining"]
@@ -1704,7 +1720,7 @@ def evaluate_pair_state_by_x_component_coloring(
             r=r,
         )
         evaluation["coeff"] = term["coeff"]
-        evaluation["history"] = term.get("history", [])
+        evaluation["history"] = term_history(term)
         evaluation["common_forks"] = []
         evaluation["source_adj"] = term["x_adj"]
         evaluation["source_hourglasses"] = term["x_remaining"]
@@ -1831,7 +1847,7 @@ def evaluate_active_terms_by_expanding_w_then_coloring(
             x_hourglasses,
             w_adj,
             w_hourglasses,
-            term.get("history", []),
+            term_history(term),
         )
         x_now = drop_nonreciprocal_references(x_now)
         w_now = drop_nonreciprocal_references(w_now)
@@ -1849,7 +1865,7 @@ def evaluate_active_terms_by_expanding_w_then_coloring(
 
         condition = component_boundary_condition_from_x(x_now, x_boundary_labels, r=r)
 
-        stack = [(w_now, w_now_hgs, int(term["coeff"]), list(term.get("history", [])))]
+        stack = [(w_now, w_now_hgs, int(term["coeff"]), list(term_history(term)))]
         branch_expansions = 0
         while stack:
             current_w, current_wh, coeff, current_history = stack.pop()
@@ -2876,7 +2892,7 @@ def pair_active_term_summary(
         "w_forks": sorted([fork_to_list(f) for f in get_forks(term["w_adj"], w_boundary_labels)]),
         "x_remaining_hourglasses": len(term["x_remaining"]),
         "w_remaining_hourglasses": len(term["w_remaining"]),
-        "history": term.get("history", []),
+        "history": term_history(term),
         "x_edges": [list(edge) for edge in get_edge_tuple(term["x_adj"])],
         "w_edges": [list(edge) for edge in get_edge_tuple(term["w_adj"])],
     }

@@ -859,6 +859,7 @@ def draw_web_svg(
     edge_colors: Optional[Dict[Tuple[int, int], str]] = None,
     hourglass_colors: Optional[Dict[Tuple[int, int], Tuple[str, str]]] = None,
     node_ring_colors: Optional[Dict[int, str]] = None,
+    highlight_edges: Optional[Dict[Tuple[int, int], str]] = None,
     subtitle: str = "",
     size: int = 330,
 ) -> str:
@@ -866,6 +867,7 @@ def draw_web_svg(
     edge_colors = edge_colors or {}
     hourglass_colors = hourglass_colors or {}
     node_ring_colors = node_ring_colors or {}
+    highlight_edges = highlight_edges or {}
     selected_key = tuple(sorted(selected_hg)) if selected_hg else None
     selected_wrench_edges: set[Tuple[int, int]] = set()
     selected_wrench_nodes: set[int] = set()
@@ -908,6 +910,9 @@ def draw_web_svg(
         edge_key = tuple(sorted((u, v)))
         if edge_key in selected_wrench_edges:
             color = "#cf2f2f"
+            width = 5
+        elif edge_key in highlight_edges:
+            color = highlight_edges[edge_key]
             width = 5
         else:
             color = edge_colors.get(edge_key, "#111")
@@ -1122,6 +1127,8 @@ def reconstruct_run(x_path: Path, w_path: Path, proof: Dict[str, Any]):
             )
             steps.append(
                 {
+                    "phase": phase,
+                    "move": continue_move,
                     "side": side,
                     "selected": tuple(int(v) for v in continue_move.get("vertices", [])),
                     "current_x": before_x,
@@ -1198,6 +1205,8 @@ def reconstruct_run(x_path: Path, w_path: Path, proof: Dict[str, Any]):
         cont_x, cont_w, cont_xh, cont_wh, cont_new_x, cont_new_w = branch(continue_move["smoothing"])
         steps.append(
             {
+                "phase": phase,
+                "move": continue_move,
                 "side": side,
                 "selected": selected,
                 "current_x": current_x,
@@ -1387,6 +1396,17 @@ def history_sign(history: List[Dict[str, Any]]) -> int:
     return sign
 
 
+def antisym_path_label(history: List[Dict[str, Any]]) -> str:
+    labels = []
+    for idx, move in enumerate(history, start=1):
+        if move.get("phase") != "antisymmetrizer":
+            continue
+        smoothing = str(move.get("smoothing", ""))
+        vertices = move.get("vertices", [])
+        labels.append(f"m{idx}:{smoothing}@{vertices}")
+    return " -> ".join(labels)
+
+
 def coefficient_explanation(record: Dict[str, Any]) -> str:
     history = record.get("history", [])
     path_sign = history_sign(history)
@@ -1445,6 +1465,29 @@ def branch_terminal_picture(
     """
 
 
+def antisymmetrizer_move_highlights(move: Dict[str, Any]) -> Tuple[Dict[Tuple[int, int], str], Dict[int, str]]:
+    if move.get("phase") != "antisymmetrizer":
+        return {}, {}
+    try:
+        white = int(move["white"])
+        black = int(move["black"])
+        input_ports = [int(port) for port in move.get("input_ports", [])]
+        output_ports = [int(port) for port in move.get("output_ports", [])]
+    except (KeyError, TypeError, ValueError):
+        return {}, {}
+    blue = "#2586d8"
+    pale_blue = "#6bb6f0"
+    edges: Dict[Tuple[int, int], str] = {tuple(sorted((white, black))): blue}
+    rings: Dict[int, str] = {white: blue, black: blue}
+    for port in input_ports:
+        edges[tuple(sorted((white, port)))] = pale_blue
+        rings[port] = pale_blue
+    for port in output_ports:
+        edges[tuple(sorted((black, port)))] = pale_blue
+        rings[port] = pale_blue
+    return edges, rings
+
+
 def branch_move_picture(
     x_graph: Dict[str, Any],
     w_graph: Dict[str, Any],
@@ -1487,12 +1530,18 @@ def branch_move_picture(
     phase_label = phase_display_label(phase)
     new_x = edge_set(after_x) - edge_set(before_x)
     new_w = edge_set(after_w) - edge_set(before_w)
+    before_x_highlight_edges, before_x_ring_colors = antisymmetrizer_move_highlights(move)
+    before_w_highlight_edges: Dict[Tuple[int, int], str] = {}
+    before_w_ring_colors: Dict[int, str] = {}
+    if side == "W":
+        before_w_highlight_edges, before_w_ring_colors = before_x_highlight_edges, before_x_ring_colors
+        before_x_highlight_edges, before_x_ring_colors = {}, {}
     return f"""
     <div class="branch-move-picture">
       <h4>Move {move_index}: {html.escape(phase_label)} applies {html.escape(side)} {move_piece_label(move)} {html.escape(str(local_piece))} as {html.escape(smoothing)}</h4>
       <div class="grid four">
-        {draw_web_svg('Before W', w_graph, before_w, before_wh, selected_hg=None if move.get("phase") in {"figure43", "antisymmetrizer"} else (selected if side == 'W' else None), size=250)}
-        {draw_web_svg('Before X', x_graph, before_x, before_xh, selected_hg=None if move.get("phase") in {"figure43", "antisymmetrizer"} else (selected if side == 'X' else None), size=250)}
+        {draw_web_svg('Before W', w_graph, before_w, before_wh, selected_hg=None if move.get("phase") in {"figure43", "antisymmetrizer"} else (selected if side == 'W' else None), highlight_edges=before_w_highlight_edges, node_ring_colors=before_w_ring_colors, size=250)}
+        {draw_web_svg('Before X', x_graph, before_x, before_xh, selected_hg=None if move.get("phase") in {"figure43", "antisymmetrizer"} else (selected if side == 'X' else None), highlight_edges=before_x_highlight_edges, node_ring_colors=before_x_ring_colors, size=250)}
         {draw_web_svg('After W', w_graph, after_w, after_wh, edge_colors={e: '#2586d8' for e in new_w}, size=250)}
         {draw_web_svg('After X', x_graph, after_x, after_xh, edge_colors={e: '#2586d8' for e in new_x}, size=250)}
       </div>
@@ -1551,13 +1600,19 @@ def branch_process_pictures(
         phase_label = phase_display_label(phase)
         new_x = edge_set(after_x) - edge_set(before_x)
         new_w = edge_set(after_w) - edge_set(before_w)
+        before_x_highlight_edges, before_x_ring_colors = antisymmetrizer_move_highlights(move)
+        before_w_highlight_edges: Dict[Tuple[int, int], str] = {}
+        before_w_ring_colors: Dict[int, str] = {}
+        if side == "W":
+            before_w_highlight_edges, before_w_ring_colors = before_x_highlight_edges, before_x_ring_colors
+            before_x_highlight_edges, before_x_ring_colors = {}, {}
         blocks.append(
             f"""
             <div class="branch-move-picture">
               <h4>Move {idx}: {html.escape(phase_label)} applies {html.escape(side)} {move_piece_label(move)} {html.escape(str(local_piece))} as {html.escape(smoothing)}</h4>
               <div class="grid four">
-                {draw_web_svg('Before W', w_graph, before_w, before_wh, selected_hg=None if move.get("phase") in {"figure43", "antisymmetrizer"} else (selected if side == 'W' else None), size=250)}
-                {draw_web_svg('Before X', x_graph, before_x, before_xh, selected_hg=None if move.get("phase") in {"figure43", "antisymmetrizer"} else (selected if side == 'X' else None), size=250)}
+                {draw_web_svg('Before W', w_graph, before_w, before_wh, selected_hg=None if move.get("phase") in {"figure43", "antisymmetrizer"} else (selected if side == 'W' else None), highlight_edges=before_w_highlight_edges, node_ring_colors=before_w_ring_colors, size=250)}
+                {draw_web_svg('Before X', x_graph, before_x, before_xh, selected_hg=None if move.get("phase") in {"figure43", "antisymmetrizer"} else (selected if side == 'X' else None), highlight_edges=before_x_highlight_edges, node_ring_colors=before_x_ring_colors, size=250)}
                 {draw_web_svg('After W', w_graph, after_w, after_wh, edge_colors={e: '#2586d8' for e in new_w}, size=250)}
                 {draw_web_svg('After X', x_graph, after_x, after_xh, edge_colors={e: '#2586d8' for e in new_x}, size=250)}
               </div>
@@ -1698,7 +1753,13 @@ def terminal_branch_records(proof: Dict[str, Any]) -> List[Dict[str, Any]]:
             }
         )
 
-    records.sort(key=lambda item: (len(item.get("history", [])), str(item.get("id", ""))))
+    records.sort(
+        key=lambda item: (
+            antisym_path_label(item.get("history", [])),
+            len(item.get("history", [])),
+            str(item.get("id", "")),
+        )
+    )
     return records
 
 
@@ -1711,6 +1772,143 @@ def final_active_branch_count(proof: Dict[str, Any]) -> int:
     if evaluations:
         return sum(1 for item in evaluations if item.get("term_value") is None and item.get("status") != "fork_killed")
     return int(proof.get("active_term_count", 0) or 0)
+
+
+def render_antisym_branch_tree(records: List[Dict[str, Any]], params: Dict[str, str]) -> str:
+    class TreeNode:
+        def __init__(self, key: str, label: str, *, branch: Optional[Dict[str, Any]] = None):
+            self.key = key
+            self.label = label
+            self.branch = branch
+            self.children: List["TreeNode"] = []
+            self.child_by_key: Dict[str, "TreeNode"] = {}
+            self.x = 0.0
+            self.y = 0.0
+
+        def child(self, key: str, label: str, *, branch: Optional[Dict[str, Any]] = None) -> "TreeNode":
+            existing = self.child_by_key.get(key)
+            if existing is not None:
+                return existing
+            node = TreeNode(key, label, branch=branch)
+            self.child_by_key[key] = node
+            self.children.append(node)
+            return node
+
+    root = TreeNode("root", "root")
+    antisym_count = 0
+    for record in records:
+        history = record.get("history", [])
+        antisym_moves = [
+            (idx, move)
+            for idx, move in enumerate(history, start=1)
+            if move.get("phase") == "antisymmetrizer"
+        ]
+        if not antisym_moves:
+            continue
+        antisym_count += len(antisym_moves)
+        node = root
+        for idx, move in antisym_moves:
+            smoothing = str(move.get("smoothing", "perm"))
+            vertices = move.get("vertices", [])
+            key = f"{idx}:{smoothing}:{vertices}"
+            label = f"m{idx} {smoothing}"
+            node = node.child(key, label)
+        value = record.get("value")
+        value_text = "None" if value is None else str(value)
+        leaf_label = f"{record.get('id')} {record.get('status')} v={value_text}"
+        node.child(f"leaf:{record.get('id')}", leaf_label, branch=record)
+
+    if not root.children:
+        return ""
+
+    leaves: List[TreeNode] = []
+
+    def collect_leaves(node: TreeNode, depth: int = 0) -> int:
+        max_depth = depth
+        if not node.children:
+            leaves.append(node)
+            return depth
+        for child in node.children:
+            max_depth = max(max_depth, collect_leaves(child, depth + 1))
+        return max_depth
+
+    max_depth = collect_leaves(root)
+    row_gap = 42
+    col_gap = 205
+    left = 70
+    top = 45
+    width = max(760, left * 2 + col_gap * max_depth + 260)
+    height = max(150, top * 2 + row_gap * max(1, len(leaves) - 1))
+
+    for pos, leaf in enumerate(leaves):
+        leaf.y = top + pos * row_gap
+
+    def place(node: TreeNode, depth: int = 0) -> None:
+        node.x = left + depth * col_gap
+        for child in node.children:
+            place(child, depth + 1)
+        if node.children:
+            node.y = sum(child.y for child in node.children) / len(node.children)
+
+    place(root)
+
+    edges = []
+    nodes = []
+
+    def branch_href(record: Dict[str, Any]) -> str:
+        branch_params = dict(params)
+        branch_params["branch_id"] = str(record.get("id", ""))
+        return "/branch?" + urllib.parse.urlencode(branch_params)
+
+    def node_color(node: TreeNode) -> Tuple[str, str, str]:
+        if node.key == "root":
+            return "#17202a", "#17202a", "#fff"
+        if node.branch is None:
+            return "#2586d8", "#2586d8", "#fff"
+        status = str(node.branch.get("status", ""))
+        if status == "killed":
+            return "#149451", "#149451", "#fff"
+        if status == "colored":
+            return "#8e44ad", "#8e44ad", "#fff"
+        return "#b7791f", "#b7791f", "#fff"
+
+    def draw(node: TreeNode) -> None:
+        for child in node.children:
+            edges.append(
+                f'<path d="M {node.x + 28:.1f} {node.y:.1f} C {node.x + 92:.1f} {node.y:.1f}, '
+                f'{child.x - 92:.1f} {child.y:.1f}, {child.x - 28:.1f} {child.y:.1f}" '
+                f'fill="none" stroke="#b9c3cf" stroke-width="1.8" />'
+            )
+            draw(child)
+        stroke, fill, text_fill = node_color(node)
+        label = html.escape(node.label)
+        label_width = max(62, min(168, 8 * len(node.label) + 22))
+        x = node.x - label_width / 2
+        y = node.y - 13
+        body = (
+            f'<rect x="{x:.1f}" y="{y:.1f}" width="{label_width:.1f}" height="26" rx="13" '
+            f'fill="{fill}" stroke="{stroke}" stroke-width="2" />'
+            f'<text x="{node.x:.1f}" y="{node.y + 4:.1f}" text-anchor="middle" '
+            f'font-size="11" font-family="Arial, Helvetica, sans-serif" fill="{text_fill}">{label}</text>'
+        )
+        if node.branch is not None:
+            href = html.escape(branch_href(node.branch))
+            body = f'<a href="{href}">{body}</a>'
+        nodes.append(body)
+
+    draw(root)
+
+    return f"""
+    <div class="branch-tree-graphic">
+      <div class="tree-scroll">
+        <svg class="tree-svg" viewBox="0 0 {width:.0f} {height:.0f}" width="{width:.0f}" height="{height:.0f}" role="img" aria-label="Antisymmetrizer branch tree">
+          {''.join(edges)}
+          {''.join(nodes)}
+        </svg>
+      </div>
+      <p class="muted">Blue nodes are antisymmetrizer permutation choices. Green leaves are fork-killed branches, purple leaves are colored branches, and amber leaves are still unresolved. Clicking a leaf opens that branch page.</p>
+    </div>
+    """
 
 
 def render_branch_ledger_section(
@@ -1733,6 +1931,7 @@ def render_branch_ledger_section(
         forks = record.get("forks", [])
         value = record.get("value")
         value_text = "None" if value is None else str(value)
+        antisym_label = antisym_path_label(history)
         branch_params = dict(params)
         branch_params["branch_id"] = str(record["id"])
         branch_href = "/branch?" + urllib.parse.urlencode(branch_params)
@@ -1742,6 +1941,7 @@ def render_branch_ledger_section(
             "<tr>"
             f"<td>{branch_link}</td>"
             f"<td>{len(history)}</td>"
+            f"<td>{html.escape(antisym_label)}</td>"
             f"<td>{html.escape(str(record.get('kind', '')))}</td>"
             f"<td>{html.escape(str(record.get('status', '')))}</td>"
             f"<td>{html.escape(str(record.get('coeff', '')))}</td>"
@@ -1764,6 +1964,39 @@ def render_branch_ledger_section(
     else:
         combo = "all displayed terminal branches currently have no computed value"
 
+    tree_rows = []
+    for record in records:
+        history = record.get("history", [])
+        antisym_label = antisym_path_label(history)
+        if not antisym_label:
+            continue
+        tree_value = record.get("value")
+        tree_value_text = "None" if tree_value is None else str(tree_value)
+        tree_rows.append(
+            "<tr>"
+            f"<td><span class=\"word\">root</span> &rarr; {html.escape(antisym_label)}</td>"
+            f"<td>{html.escape(str(record['id']))}</td>"
+            f"<td>{html.escape(str(record.get('kind', '')))}</td>"
+            f"<td>{html.escape(str(record.get('status', '')))}</td>"
+            f"<td>{html.escape(tree_value_text)}</td>"
+            "</tr>"
+        )
+    tree_html = ""
+    if tree_rows:
+        tree_html = f"""
+          <div class="branch-tree">
+            <h3>Antisymmetrizer Branch Tree</h3>
+            <p class="muted">The graphic groups terminal branches by the permutation choices created by white-black antisymmetrizer moves.</p>
+            {render_antisym_branch_tree(records, params)}
+            <h3>Antisymmetrizer Branch Table</h3>
+            <p class="muted">The table is the exact text version of the same paths for audit/checking.</p>
+            <table class="step-table">
+              <thead><tr><th>path</th><th>branch</th><th>terminal rule</th><th>status</th><th>value</th></tr></thead>
+              <tbody>{''.join(tree_rows)}</tbody>
+            </table>
+          </div>
+        """
+
     return f"""
     <section class="step branch-ledger">
       <div class="step-head">
@@ -1773,10 +2006,11 @@ def render_branch_ledger_section(
       <p><strong>Linear combination:</strong> <span class="word">{html.escape(combo)}</span></p>
       <table class="step-table branch-ledger-table">
         <thead>
-          <tr><th>branch</th><th>moves</th><th>terminal rule</th><th>status</th><th>coeff</th><th>value</th><th>fork(s)</th><th>details</th></tr>
+          <tr><th>branch</th><th>moves</th><th>antisym path</th><th>terminal rule</th><th>status</th><th>coeff</th><th>value</th><th>fork(s)</th><th>details</th></tr>
         </thead>
         <tbody>{''.join(rows)}</tbody>
       </table>
+      {tree_html}
     </section>
     """
 
@@ -2078,6 +2312,12 @@ def run_pair(params: Dict[str, str]) -> str:
                 killed_branch_text = f"{html.escape(step['killed_smoothing'])} branch remains active"
                 continue_title = "Displayed continuing branch"
                 continue_note = "this is the branch followed in the trace"
+            elif sibling_status == "six_term_relation":
+                killed_title = "Other five permutation branches"
+                killed_note = "These sibling branches come from the same white-black antisymmetrizer move and are listed separately in the Branch Ledger."
+                killed_branch_text = "the other five permutation branches are listed separately"
+                continue_title = "Displayed permutation branch"
+                continue_note = "this is the chosen permutation branch followed in this trace"
             else:
                 killed_title = "Other branch not found in displayed path"
                 killed_note = "This is not a fork-lemma kill; the full search/correction pipeline must continue or evaluate it."
@@ -2085,6 +2325,21 @@ def run_pair(params: Dict[str, str]) -> str:
                 continue_title = "Displayed continuing branch"
                 continue_note = "this is the branch followed in the trace"
             selected = step["selected"]
+            step_phase = step.get("phase", "main_search")
+            step_move = step.get("move", {})
+            current_highlight_edges, current_ring_colors = antisymmetrizer_move_highlights(step_move)
+            current_w_highlight_edges = current_highlight_edges if step["side"] == "W" else {}
+            current_w_ring_colors = current_ring_colors if step["side"] == "W" else {}
+            current_x_highlight_edges = current_highlight_edges if step["side"] == "X" else {}
+            current_x_ring_colors = current_ring_colors if step["side"] == "X" else {}
+            selected_for_w = selected if step["side"] == "W" and step_phase not in {"figure43", "antisymmetrizer"} else None
+            selected_for_x = selected if step["side"] == "X" and step_phase not in {"figure43", "antisymmetrizer"} else None
+            if step_phase == "antisymmetrizer":
+                step_title = f"apply {step['side']} white-black antisymmetrizer {list(selected)}"
+            elif step_phase == "figure43":
+                step_title = f"apply {step['side']} Figure 43 piece {list(selected)}"
+            else:
+                step_title = f"expand {step['side']} hourglass {list(selected)}"
             display_killed_w = step['killed_w']
             display_killed_x = step['killed_x']
             display_killed_wh = step['killed_wh']
@@ -2113,12 +2368,12 @@ def run_pair(params: Dict[str, str]) -> str:
                 f"""
                 <section class="step">
                   <div class="step-head">
-                    <div><strong>Step {idx}</strong>: expand {step['side']} hourglass {list(selected)}</div>
+                    <div><strong>Step {idx}</strong>: {html.escape(step_title)}</div>
                     <div class="muted">{html.escape(step['continue_smoothing'])} branch continues; {killed_branch_text}</div>
                   </div>
                   <div class="grid four">
-                    {draw_web_svg('Current W', w_graph, step['current_w'], step['current_wh'], selected_hg=selected if step['side']=='W' else None)}
-                    {draw_web_svg('Current X', x_graph, step['current_x'], step['current_xh'], selected_hg=selected if step['side']=='X' else None)}
+                    {draw_web_svg('Current W', w_graph, step['current_w'], step['current_wh'], selected_hg=selected_for_w, highlight_edges=current_w_highlight_edges, node_ring_colors=current_w_ring_colors)}
+                    {draw_web_svg('Current X', x_graph, step['current_x'], step['current_xh'], selected_hg=selected_for_x, highlight_edges=current_x_highlight_edges, node_ring_colors=current_x_ring_colors)}
                     <div class="pair-card">
                       <div class="pair-title">{killed_title}</div>
                       <div class="pair-note">{killed_note}</div>
@@ -2162,6 +2417,7 @@ def run_pair(params: Dict[str, str]) -> str:
                 "continued_to_fallback": "continued to W-expansion/coloring",
                 "continued_active": "continued and remains active",
                 "not_found": "not found on displayed path",
+                "six_term_relation": "other five antisymmetrizer permutation branches listed separately",
             }.get(sibling_status, str(sibling_status))
             extra = int(step["killed"].get("continued_steps", 0) or 0)
             extra_text = f" after {extra} further move(s)" if sibling_status == "continued_then_fork_killed" else ""
@@ -2437,16 +2693,32 @@ def render_coloring_section(
         x_edge_colors = edge_colors if colored_side == "X" else {}
         w_hg_colors = hg_colors if colored_side == "W" else {}
         x_hg_colors = hg_colors if colored_side == "X" else {}
+        coloring_count = int(ev.get("coloring_count", 0) or 0)
+        if coloring_count == 0:
+            branch_title = f"Coloring branch {idx}: no compatible coloring"
+            coloring_note = (
+                "The boundary component colors forced by X do not extend to a valid edge-coloring of W. "
+                "So this branch contributes 0; W is shown uncolored because there is no sample coloring to display."
+            )
+            w_title = "W: no compatible edge coloring exists"
+            w_subtitle = "the forced boundary colors cannot be extended"
+        else:
+            branch_title = f"Surviving branch {idx}"
+            coloring_note = (
+                "Hourglass strands use unordered distinct color pairs; swapping the two hourglass strand colors is not counted again."
+            )
+            w_title = "W: compatible edge coloring"
+            w_subtitle = "edge-colored from X boundary components"
         cards.append(
             f"""
             <div class="factor-box">
-              <h3>Surviving branch {idx}</h3>
+              <h3>{html.escape(branch_title)}</h3>
               <p><strong>Coefficient:</strong> {html.escape(str(ev.get('coeff')))}</p>
               <p><strong>Coloring count:</strong> {html.escape(str(ev.get('coloring_count')))}</p>
               <p><strong>Contribution:</strong> {html.escape(str(ev.get('term_value')))}</p>
-              <p class="muted">Hourglass strands use unordered distinct color pairs; swapping the two hourglass strand colors is not counted again.</p>
+              <p class="muted">{html.escape(coloring_note)}</p>
               <div class="grid two">
-                {draw_web_svg('W: compatible edge coloring', w_graph, w_adj, w_hgs, edge_colors=w_edge_colors, hourglass_colors=w_hg_colors, node_ring_colors=w_rings, subtitle='edge-colored from X boundary components')}
+                {draw_web_svg(w_title, w_graph, w_adj, w_hgs, edge_colors=w_edge_colors, hourglass_colors=w_hg_colors, node_ring_colors=w_rings, subtitle=w_subtitle)}
                 {draw_web_svg('X: boundary component colors', x_graph, x_adj, x_hgs, edge_colors=x_edge_colors, hourglass_colors=x_hg_colors, node_ring_colors=x_rings, subtitle='only boundary vertices are colored')}
               </div>
             </div>
@@ -2552,6 +2824,10 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
     .branch-lazy-output {{ margin-top:12px; }}
     .branch-move-picture {{ border-top:1px solid var(--line); padding-top:12px; margin-top:12px; }}
     .branch-move-picture h4 {{ margin:0 0 8px; font-size:14px; }}
+    .branch-tree {{ margin-top:18px; border-top:1px solid var(--line); padding-top:14px; }}
+    .branch-tree-graphic {{ margin:10px 0 18px; }}
+    .tree-scroll {{ overflow:auto; max-height:520px; border:1px solid var(--line); border-radius:8px; background:#fbfdff; padding:10px; }}
+    .tree-svg {{ display:block; min-width:720px; }}
     @media (max-width: 1300px) {{ form, .summary, .grid.four, .grid.two {{ grid-template-columns: 1fr; }} }}
   </style>
 </head>
