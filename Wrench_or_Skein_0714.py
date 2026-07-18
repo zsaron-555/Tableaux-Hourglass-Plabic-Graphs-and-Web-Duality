@@ -34,20 +34,6 @@ NodeColors = Dict[int, str]
 NodeXY = Dict[int, Tuple[float, float]]
 
 APP_DIR = Path(__file__).resolve().parent
-VALUE_ONLY_MODE = os.environ.get("HG_VALUE_ONLY", "") == "1"
-
-
-def term_history(term: Dict[str, Any]) -> List[Dict[str, Any]]:
-    if VALUE_ONLY_MODE:
-        return []
-    return term.get("history", [])
-
-
-def extend_history(term: Dict[str, Any], move: Dict[str, Any]) -> List[Dict[str, Any]]:
-    if VALUE_ONLY_MODE:
-        return []
-    return term.get("history", []) + [move]
-
 DEFAULT_PROJECT_ROOTS = [
     Path(os.environ.get("PROBLEM3_ROOT", APP_DIR)).expanduser().resolve(),
     Path.cwd().resolve(),
@@ -153,15 +139,13 @@ def orient_hourglass_ports(
         key=lambda n: _dot_with_perp(left, n, perp, nodes),
         reverse=True,
     )
-    # Use the same geometric perpendicular direction at both endpoints.
-    # Reversing the right endpoint here swaps the mathematical meanings of the
-    # two smoothings: the branch named ``crossing`` becomes top-to-top and the
-    # branch named ``parallel`` becomes top-to-bottom.  Keeping both endpoint
-    # orders geometric makes the names, pictures, and coefficients agree.
+    # The opposite endpoint sees the local picture from the other side of the
+    # hourglass. Reverse its perpendicular ordering so the local top/bottom
+    # names are paired consistently when the replacement strands cross the
+    # hourglass region.
     right_sorted = sorted(
         right_neighbors,
         key=lambda n: _dot_with_perp(right, n, perp, nodes),
-        reverse=True,
     )
 
     ports = {
@@ -224,6 +208,29 @@ def parse_web(
             adj[u].append(v)
         if isinstance(adj[v], list):
             adj[v].append(u)
+
+    # For an even-valent tensor diagram, the cyclic order needs a distinguished
+    # starting half-edge (the tag).  The JSON rotation system already gives us
+    # both pieces of data: ``ccw_slot == 0`` is the stored tag and increasing
+    # slots give the cyclic order.  Keep that order in the adjacency lists so
+    # local rewrites can transport it simply by replacing a neighbor in place.
+    # Iterating the raw edge array here used to retain edge-id order instead;
+    # that loses the SL4 vertex sign after a sequence of wrench moves.
+    for node, neighbors in list(adj.items()):
+        if not isinstance(neighbors, list) or not neighbors:
+            continue
+        rotation_entries = sorted(rot_sys[str(node)], key=lambda item: int(item["ccw_slot"]))
+        ordered = [
+            int(item["neighbor"])
+            for item in rotation_entries
+            if item["kind"] == "ordinary" and int(item["neighbor"]) in neighbors
+        ]
+        if sorted(ordered) != sorted(neighbors):
+            raise ValueError(
+                f"Rotation system and ordinary adjacency disagree at node {node}: "
+                f"rotation={ordered}, adjacency={neighbors}."
+            )
+        adj[node] = ordered
 
     for hg in hourglasses:
         left = int(hg["left"])
@@ -382,6 +389,128 @@ def replace_neighbor(node: int, old_neighbor: int, new_neighbor: int, adj: Adjac
 def splice_pair(adj: Adjacency, a_endpoint: int, a_port: int, b_endpoint: int, b_port: int) -> None:
     replace_neighbor(a_port, a_endpoint, b_port, adj)
     replace_neighbor(b_port, b_endpoint, a_port, adj)
+
+
+def swap_cyclic_neighbors(adj: Adjacency, node: int, first: int, second: int) -> None:
+    """Transpose two half-edge slots at ``node`` without changing topology."""
+    neighbors = adj[node]
+    if isinstance(neighbors, dict):
+        first_port = next((port for port, value in neighbors.items() if value == first), None)
+        second_port = next((port for port, value in neighbors.items() if value == second), None)
+        if first_port is None or second_port is None:
+            raise ValueError(f"Cannot transpose {first} and {second} at node {node}.")
+        neighbors[first_port], neighbors[second_port] = neighbors[second_port], neighbors[first_port]
+        return
+    try:
+        first_index = neighbors.index(first)
+        second_index = neighbors.index(second)
+    except ValueError as exc:
+        raise ValueError(f"Cannot transpose {first} and {second} at node {node}.") from exc
+    neighbors[first_index], neighbors[second_index] = neighbors[second_index], neighbors[first_index]
+
+
+def _point_toward(
+    start: Tuple[float, float],
+    target: Tuple[float, float],
+    fraction: float = 0.42,
+) -> Tuple[float, float]:
+    return (
+        start[0] + fraction * (target[0] - start[0]),
+        start[1] + fraction * (target[1] - start[1]),
+    )
+
+
+def _tangent_cubic(
+    start_node: int,
+    start_tangent_node: int,
+    end_node: int,
+    end_tangent_node: int,
+    node_xy: NodeXY,
+) -> List[Tuple[float, float]]:
+    """Cubic whose endpoint tangents follow the two removed local edges."""
+    start = node_xy[start_node]
+    end = node_xy[end_node]
+    return [
+        start,
+        _point_toward(start, node_xy[start_tangent_node]),
+        _point_toward(end, node_xy[end_tangent_node]),
+        end,
+    ]
+
+
+def _cubic_point(points: List[Tuple[float, float]], t: float) -> Tuple[float, float]:
+    p0, p1, p2, p3 = points
+    s = 1.0 - t
+    return (
+        s**3 * p0[0] + 3 * s * s * t * p1[0] + 3 * s * t * t * p2[0] + t**3 * p3[0],
+        s**3 * p0[1] + 3 * s * s * t * p1[1] + 3 * s * t * t * p2[1] + t**3 * p3[1],
+    )
+
+
+def _orientation(a: Tuple[float, float], b: Tuple[float, float], c: Tuple[float, float]) -> float:
+    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+
+def _proper_segment_crossing(
+    a: Tuple[float, float],
+    b: Tuple[float, float],
+    c: Tuple[float, float],
+    d: Tuple[float, float],
+    eps: float = 1e-10,
+) -> bool:
+    ab_c = _orientation(a, b, c)
+    ab_d = _orientation(a, b, d)
+    cd_a = _orientation(c, d, a)
+    cd_b = _orientation(c, d, b)
+    return ab_c * ab_d < -eps and cd_a * cd_b < -eps
+
+
+def _curve_crosses_incident_edge(
+    curve: List[Tuple[float, float]],
+    shared: int,
+    other: int,
+    node_xy: NodeXY,
+) -> bool:
+    """Test interiors only; the common endpoint is not a crossing."""
+    if shared not in node_xy or other not in node_xy:
+        return False
+    curve_points = [_cubic_point(curve, index / 32.0) for index in range(2, 33)]
+    edge_start = _point_toward(node_xy[shared], node_xy[other], 0.04)
+    edge_end = node_xy[other]
+    previous = _cubic_point(curve, 0.04)
+    for point in curve_points:
+        if _proper_segment_crossing(previous, point, edge_start, edge_end):
+            return True
+        previous = point
+    return False
+
+
+def _cyclically_between_on_short_arc(
+    middle: int,
+    first: int,
+    second: int,
+    node_xy: Optional[NodeXY],
+) -> bool:
+    """Whether ``middle`` lies strictly on the shorter circular arc first--second."""
+    if not node_xy or any(node not in node_xy for node in (middle, first, second)):
+        return False
+    tau = 2.0 * math.pi
+    first_angle = math.atan2(node_xy[first][1], node_xy[first][0]) % tau
+    second_angle = math.atan2(node_xy[second][1], node_xy[second][0]) % tau
+    middle_angle = math.atan2(node_xy[middle][1], node_xy[middle][0]) % tau
+    span = (second_angle - first_angle) % tau
+    if span > math.pi:
+        first_angle, second_angle = second_angle, first_angle
+        span = (second_angle - first_angle) % tau
+    offset = (middle_angle - first_angle) % tau
+    return 1e-9 < offset < span - 1e-9
+
+
+def _edge_curve_record(edge: Tuple[int, int], points: List[Tuple[float, float]]) -> Dict[str, Any]:
+    return {
+        "edge": [int(edge[0]), int(edge[1])],
+        "points": [[float(x), float(y)] for x, y in points],
+    }
 
 
 def _edge_pair(u: int, v: int) -> Tuple[int, int]:
@@ -795,8 +924,22 @@ def apply_antisymmetrizer_move(
     return new_adj
 
 
-def smooth_one_hourglass(adj: Adjacency, hg: Hourglass, smoothing: str) -> Adjacency:
-    """Remove one wrench/hourglass and perform one of the Figure 4 smoothings."""
+def smooth_one_hourglass_embedded(
+    adj: Adjacency,
+    hg: Hourglass,
+    smoothing: str,
+    *,
+    node_xy: Optional[NodeXY] = None,
+    forced_untwists: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[Adjacency, Dict[str, Any]]:
+    """Smooth one wrench while transporting its tagged planar embedding.
+
+    Replacement edges are represented by cubics tangent to the deleted edges
+    at both leaves.  If such an edge is twisted around another edge incident to
+    the same leaf, the two half-edge slots are transposed and the branch gains
+    a factor of ``-1``.  ``forced_untwists`` is used when replaying a stored
+    branch, making history replay independent of drawing coordinates.
+    """
     if smoothing not in {"crossing", "parallel"}:
         raise ValueError("smoothing must be 'crossing' or 'parallel'.")
 
@@ -816,22 +959,165 @@ def smooth_one_hourglass(adj: Adjacency, hg: Hourglass, smoothing: str) -> Adjac
     lt, lb = int(adj[left]["top"]), int(adj[left]["bot"])
     rt, rb = int(adj[right]["top"]), int(adj[right]["bot"])
 
+    if smoothing == "crossing":
+        pairings = [(lt, left, rb, right), (lb, left, rt, right)]
+    else:
+        # Parallel term in the wrench relation: both replacement edges run
+        # across the hourglass region without using the diagonal splice.
+        pairings = [(lt, left, rt, right), (lb, left, rb, right)]
+
     new_adj = copy.deepcopy(adj)
     if smoothing == "crossing":
         splice_pair(new_adj, left, lt, right, rb)
         splice_pair(new_adj, left, lb, right, rt)
     else:
-        # Parallel term in the wrench relation: both replacement edges run
-        # across the hourglass region, but they do not use the diagonal
-        # i_2--j_1-style splice.  That diagonal belongs to the crossing term.
         splice_pair(new_adj, left, lt, right, rt)
         splice_pair(new_adj, left, lb, right, rb)
+
+    black_leaves = [int(v) for v in neighbor_list(adj[int(hg["white"])] if "white" in hg else [])]
+    white_leaves = [int(v) for v in neighbor_list(adj[int(hg["black"])] if "black" in hg else [])]
+    if len(black_leaves) != 2 or len(white_leaves) != 2:
+        # The current left/right ports are authoritative after earlier moves.
+        if int(hg.get("white", -1)) == left:
+            black_leaves, white_leaves = [lt, lb], [rt, rb]
+        else:
+            black_leaves, white_leaves = [rt, rb], [lt, lb]
+
+    curves: Dict[Tuple[int, int], List[Tuple[float, float]]] = {}
+    tangent_endpoint: Dict[Tuple[int, int], Dict[int, int]] = {}
+    if node_xy:
+        for first_port, first_endpoint, second_port, second_endpoint in pairings:
+            edge = _edge_pair(first_port, second_port)
+            if all(node in node_xy for node in (first_port, first_endpoint, second_port, second_endpoint)):
+                curves[edge] = _tangent_cubic(
+                    first_port,
+                    first_endpoint,
+                    second_port,
+                    second_endpoint,
+                    node_xy,
+                )
+                tangent_endpoint[edge] = {
+                    first_port: first_endpoint,
+                    second_port: second_endpoint,
+                }
+
+    if forced_untwists is None:
+        untwists: List[Dict[str, Any]] = []
+        seen_untwists: Set[Tuple[int, int, int]] = set()
+        opposite_pair_by_leaf = {
+            **{leaf: tuple(white_leaves) for leaf in black_leaves},
+            **{leaf: tuple(black_leaves) for leaf in white_leaves},
+        }
+        for first_port, first_endpoint, second_port, second_endpoint in pairings:
+            for leaf, removed_endpoint, new_neighbor in (
+                (first_port, first_endpoint, second_port),
+                (second_port, second_endpoint, first_port),
+            ):
+                new_edge = _edge_pair(leaf, new_neighbor)
+                curve = curves.get(new_edge)
+                for existing_neighbor in neighbor_list(adj.get(leaf, [])):
+                    if existing_neighbor in {removed_endpoint, new_neighbor, left, right}:
+                        continue
+                    opposite_pair = opposite_pair_by_leaf.get(leaf, ())
+                    cyclic_issue = len(opposite_pair) == 2 and _cyclically_between_on_short_arc(
+                        existing_neighbor,
+                        opposite_pair[0],
+                        opposite_pair[1],
+                        node_xy,
+                    )
+                    geometric_crossing = bool(
+                        curve
+                        and node_xy
+                        and _curve_crosses_incident_edge(curve, leaf, existing_neighbor, node_xy)
+                    )
+                    if not cyclic_issue and not geometric_crossing:
+                        continue
+                    key = (int(leaf), int(new_neighbor), int(existing_neighbor))
+                    if key in seen_untwists:
+                        continue
+                    seen_untwists.add(key)
+                    untwists.append(
+                        {
+                            "vertex": int(leaf),
+                            "new_neighbor": int(new_neighbor),
+                            "existing_neighbor": int(existing_neighbor),
+                            "reason": (
+                                "cyclic_between_opposite_leaves"
+                                if cyclic_issue
+                                else "tangent_curves_cross"
+                            ),
+                        }
+                    )
+    else:
+        untwists = copy.deepcopy(forced_untwists)
+
+    for untwist in untwists:
+        vertex = int(untwist["vertex"])
+        new_neighbor = int(untwist["new_neighbor"])
+        existing_neighbor = int(untwist["existing_neighbor"])
+        swap_cyclic_neighbors(new_adj, vertex, new_neighbor, existing_neighbor)
+
+        # Draw the untwisted representative: exchange the two local tangents.
+        if node_xy:
+            new_edge = _edge_pair(vertex, new_neighbor)
+            old_tangent = tangent_endpoint.get(new_edge, {}).get(vertex)
+            if new_edge in curves and old_tangent in node_xy and existing_neighbor in node_xy:
+                points = curves[new_edge]
+                if points[0] == node_xy[vertex]:
+                    points[1] = _point_toward(node_xy[vertex], node_xy[existing_neighbor])
+                else:
+                    points[2] = _point_toward(node_xy[vertex], node_xy[existing_neighbor])
+                existing_edge = _edge_pair(vertex, existing_neighbor)
+                if vertex <= existing_neighbor:
+                    existing_points = [
+                        node_xy[vertex],
+                        _point_toward(node_xy[vertex], node_xy[old_tangent]),
+                        _point_toward(node_xy[existing_neighbor], node_xy[vertex]),
+                        node_xy[existing_neighbor],
+                    ]
+                else:
+                    existing_points = [
+                        node_xy[existing_neighbor],
+                        _point_toward(node_xy[existing_neighbor], node_xy[vertex]),
+                        _point_toward(node_xy[vertex], node_xy[old_tangent]),
+                        node_xy[vertex],
+                    ]
+                curves[existing_edge] = existing_points
 
     del new_adj[left]
     del new_adj[right]
     new_adj = drop_nonreciprocal_references(new_adj)
     validate_adjacency(new_adj)
-    return new_adj
+    relation_multiplier = move_multiplier(smoothing)
+    untwist_multiplier = -1 if len(untwists) % 2 else 1
+    metadata = {
+        "relation_multiplier": relation_multiplier,
+        "untwist_count": len(untwists),
+        "untwist_multiplier": untwist_multiplier,
+        "coefficient_multiplier": relation_multiplier * untwist_multiplier,
+        "untwists": untwists,
+        "replacement_edges": [[int(a), int(b)] for a, _, b, _ in pairings],
+        "edge_curves": [_edge_curve_record(edge, points) for edge, points in sorted(curves.items())],
+    }
+    return new_adj, metadata
+
+
+def smooth_one_hourglass(
+    adj: Adjacency,
+    hg: Hourglass,
+    smoothing: str,
+    *,
+    node_xy: Optional[NodeXY] = None,
+    forced_untwists: Optional[List[Dict[str, Any]]] = None,
+) -> Adjacency:
+    """Compatibility wrapper returning only the smoothed adjacency."""
+    return smooth_one_hourglass_embedded(
+        adj,
+        hg,
+        smoothing,
+        node_xy=node_xy,
+        forced_untwists=forced_untwists,
+    )[0]
 
 
 def fork_to_list(fork: frozenset[int]) -> List[int]:
@@ -888,6 +1174,7 @@ def strategic_fork_search(
     beam_width: int = 20,
     max_depth: Optional[int] = None,
     stop_when_common_fork_created: bool = True,
+    node_xy: Optional[NodeXY] = None,
 ) -> Dict[str, Any]:
     """Search for wrench moves on X that create a fork also present in W.
 
@@ -935,7 +1222,9 @@ def strategic_fork_search(
             for hg in branch["remaining"]:
                 for smoothing in ("crossing", "parallel"):
                     try:
-                        next_adj = smooth_one_hourglass(branch["adj"], hg, smoothing)
+                        next_adj, embedding = smooth_one_hourglass_embedded(
+                            branch["adj"], hg, smoothing, node_xy=node_xy
+                        )
                     except ValueError:
                         continue
                     next_remaining = remaining_after_move(branch["remaining"], hg)
@@ -944,7 +1233,6 @@ def strategic_fork_search(
                     move = {
                         "depth": depth + 1,
                         "smoothing": smoothing,
-                        "coefficient_multiplier": move_multiplier(smoothing),
                         "white": int(hg["white"]),
                         "black": int(hg["black"]),
                         "left": int(hg["left"]),
@@ -952,11 +1240,12 @@ def strategic_fork_search(
                         "local_case": hg.get("local_case", ""),
                         "common_forks_after_move": sorted([fork_to_list(f) for f in after_common]),
                         "new_common_forks": sorted([fork_to_list(f) for f in created_common]),
+                        **embedding,
                     }
                     next_branch = {
                         "adj": next_adj,
                         "remaining": next_remaining,
-                        "coeff": branch["coeff"] * move_multiplier(smoothing),
+                        "coeff": branch["coeff"] * int(embedding["coefficient_multiplier"]),
                         "moves": branch["moves"] + [move],
                         "score": score_strategic_branch(
                             next_adj,
@@ -1028,16 +1317,39 @@ def has_common_fork(
     return bool(common), common
 
 
-def term_key(term: Dict[str, Any]) -> Tuple[Tuple[Tuple[int, int], ...], Tuple[Tuple[int, int], ...]]:
+def tagged_rotation_tuple(adj: Adjacency) -> Tuple[Tuple[Any, ...], ...]:
+    """Return the tagged cyclic port order carried by an adjacency state.
+
+    Ordinary vertex lists start at the stored tag and follow the rotation
+    system.  Hourglass endpoint dictionaries use the explicit top/bottom port
+    names.  This information is part of an SL4 tensor diagram, so two states
+    with the same unoriented edge set but different port order must not be
+    consolidated before their vertex signs are evaluated.
+    """
+    records: List[Tuple[Any, ...]] = []
+    for node in sorted(adj):
+        neighbors = adj[node]
+        if isinstance(neighbors, dict):
+            records.append(
+                (
+                    "hourglass",
+                    int(node),
+                    int(neighbors["top"]) if neighbors.get("top") is not None else None,
+                    int(neighbors["bot"]) if neighbors.get("bot") is not None else None,
+                )
+            )
+        else:
+            records.append(("ordinary", int(node), *(int(v) for v in neighbors)))
+    return tuple(records)
+
+
+def term_key(term: Dict[str, Any]) -> Tuple[Any, ...]:
     remaining_keys = tuple(sorted(hourglass_key(hg) for hg in term["remaining"]))
-    return get_edge_tuple(term["adj"]), remaining_keys
+    return get_edge_tuple(term["adj"]), remaining_keys, tagged_rotation_tuple(term["adj"])
 
 
 def consolidate_terms(terms: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    consolidated: Dict[
-        Tuple[Tuple[Tuple[int, int], ...], Tuple[Tuple[int, int], ...]],
-        Dict[str, Any],
-    ] = {}
+    consolidated: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
     for term in terms:
         key = term_key(term)
         if key not in consolidated:
@@ -1045,7 +1357,7 @@ def consolidate_terms(terms: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "adj": term["adj"],
                 "remaining": term["remaining"],
                 "coeff": 0,
-                "history": term_history(term),
+                "history": term.get("history", []),
             }
         consolidated[key]["coeff"] += term["coeff"]
     return [term for term in consolidated.values() if term["coeff"] != 0]
@@ -1065,7 +1377,7 @@ def discharge_terms_by_fork(
                 {
                     "coeff": term["coeff"],
                     "common_forks": sorted([fork_to_list(f) for f in common]),
-                    "history": term_history(term),
+                    "history": term.get("history", []),
                     "reason": "fork_lemma",
                 }
             )
@@ -1091,23 +1403,33 @@ def score_proof_state(
     return (len(discharged), -len(active), best_common, -remaining_hg)
 
 
-def expand_one_term_at_hourglass(term: Dict[str, Any], hg: Hourglass) -> List[Dict[str, Any]]:
+def expand_one_term_at_hourglass(
+    term: Dict[str, Any],
+    hg: Hourglass,
+    *,
+    node_xy: Optional[NodeXY] = None,
+) -> List[Dict[str, Any]]:
     children = []
     for smoothing in ("crossing", "parallel"):
-        child_adj = smooth_one_hourglass(term["adj"], hg, smoothing)
+        child_adj, embedding = smooth_one_hourglass_embedded(
+            term["adj"],
+            hg,
+            smoothing,
+            node_xy=node_xy,
+        )
         child_remaining = remaining_after_move(term["remaining"], hg)
         move = {
             "hourglass": [int(hg["white"]), int(hg["black"])],
             "smoothing": smoothing,
-            "coefficient_multiplier": move_multiplier(smoothing),
             "local_case": hg.get("local_case", ""),
+            **embedding,
         }
         children.append(
             {
                 "adj": child_adj,
                 "remaining": child_remaining,
-                "coeff": term["coeff"] * move_multiplier(smoothing),
-                "history": extend_history(term, move),
+                "coeff": term["coeff"] * int(embedding["coefficient_multiplier"]),
+                "history": term.get("history", []) + [move],
             }
         )
     return children
@@ -1118,6 +1440,7 @@ def choose_strategic_expansions_for_state(
     discharged: List[Dict[str, Any]],
     boundary_labels: BoundaryLabels,
     target_forks: Set[frozenset[int]],
+    node_xy: Optional[NodeXY] = None,
 ) -> List[Dict[str, Any]]:
     """Generate all one-wrench successors, scored by how many branches die."""
     successors: List[Dict[str, Any]] = []
@@ -1126,7 +1449,7 @@ def choose_strategic_expansions_for_state(
             continue
         for hg in term["remaining"]:
             try:
-                children = expand_one_term_at_hourglass(term, hg)
+                children = expand_one_term_at_hourglass(term, hg, node_xy=node_xy)
             except ValueError:
                 continue
             next_terms = active[:term_idx] + active[term_idx + 1 :] + children
@@ -1162,6 +1485,7 @@ def prove_pair_zero_by_wrench_and_forks(
     *,
     beam_width: int = 40,
     max_steps: Optional[int] = None,
+    x_node_xy: Optional[NodeXY] = None,
 ) -> Dict[str, Any]:
     """Try to prove <X,W>=0 by expanding X and killing branches by forks.
 
@@ -1205,6 +1529,7 @@ def prove_pair_zero_by_wrench_and_forks(
                     state["discharged"],
                     x_boundary_labels,
                     target_forks,
+                    x_node_xy,
                 )
             )
         if not candidates:
@@ -1249,7 +1574,7 @@ def active_term_summary(
         "common_forks": sorted([fork_to_list(f) for f in common]),
         "all_forks": sorted([fork_to_list(f) for f in get_forks(term["adj"], boundary_labels)]),
         "remaining_hourglasses": len(term["remaining"]),
-        "history": term_history(term),
+        "history": term.get("history", []),
         "edges": [list(edge) for edge in get_edge_tuple(term["adj"])],
     }
 
@@ -1271,8 +1596,10 @@ def pair_term_key(term: Dict[str, Any]) -> Tuple[Any, ...]:
     return (
         get_edge_tuple(term["x_adj"]),
         tuple(sorted(hourglass_key(hg) for hg in term["x_remaining"])),
+        tagged_rotation_tuple(term["x_adj"]),
         get_edge_tuple(term["w_adj"]),
         tuple(sorted(hourglass_key(hg) for hg in term["w_remaining"])),
+        tagged_rotation_tuple(term["w_adj"]),
     )
 
 
@@ -1287,7 +1614,7 @@ def consolidate_pair_terms(terms: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "w_adj": term["w_adj"],
                 "w_remaining": term["w_remaining"],
                 "coeff": 0,
-                "history": term_history(term),
+                "history": term.get("history", []),
             }
         consolidated[key]["coeff"] += term["coeff"]
     return [term for term in consolidated.values() if term["coeff"] != 0]
@@ -1314,7 +1641,7 @@ def discharge_pair_terms_by_common_fork(
                 {
                     "coeff": term["coeff"],
                     "common_forks": sorted([fork_to_list(f) for f in common]),
-                    "history": term_history(term),
+                    "history": term.get("history", []),
                     "reason": "fork_lemma",
                 }
             )
@@ -1323,27 +1650,37 @@ def discharge_pair_terms_by_common_fork(
     return active, discharged
 
 
-def expand_pair_term(term: Dict[str, Any], side: str, hg: Hourglass) -> List[Dict[str, Any]]:
+def expand_pair_term(
+    term: Dict[str, Any],
+    side: str,
+    hg: Hourglass,
+    *,
+    node_xy: Optional[NodeXY] = None,
+) -> List[Dict[str, Any]]:
     if side not in {"X", "W"}:
         raise ValueError("side must be X or W.")
     children = []
     for smoothing in ("crossing", "parallel"):
         if side == "X":
-            child_x_adj = smooth_one_hourglass(term["x_adj"], hg, smoothing)
+            child_x_adj, embedding = smooth_one_hourglass_embedded(
+                term["x_adj"], hg, smoothing, node_xy=node_xy
+            )
             child_x_remaining = remaining_after_move(term["x_remaining"], hg)
             child_w_adj = term["w_adj"]
             child_w_remaining = term["w_remaining"]
         else:
             child_x_adj = term["x_adj"]
             child_x_remaining = term["x_remaining"]
-            child_w_adj = smooth_one_hourglass(term["w_adj"], hg, smoothing)
+            child_w_adj, embedding = smooth_one_hourglass_embedded(
+                term["w_adj"], hg, smoothing, node_xy=node_xy
+            )
             child_w_remaining = remaining_after_move(term["w_remaining"], hg)
         move = {
             "side": side,
             "hourglass": [int(hg["white"]), int(hg["black"])],
             "smoothing": smoothing,
-            "coefficient_multiplier": move_multiplier(smoothing),
             "local_case": hg.get("local_case", ""),
+            **embedding,
         }
         children.append(
             {
@@ -1351,8 +1688,8 @@ def expand_pair_term(term: Dict[str, Any], side: str, hg: Hourglass) -> List[Dic
                 "x_remaining": child_x_remaining,
                 "w_adj": child_w_adj,
                 "w_remaining": child_w_remaining,
-                "coeff": term["coeff"] * move_multiplier(smoothing),
-                "history": extend_history(term, move),
+                "coeff": term["coeff"] * int(embedding["coefficient_multiplier"]),
+                "history": term.get("history", []) + [move],
             }
         )
     return children
@@ -1402,7 +1739,7 @@ def expand_pair_term_by_figure43(
                 "w_adj": child_w_adj,
                 "w_remaining": child_w_remaining,
                 "coeff": term["coeff"] * multiplier,
-                "history": extend_history(term, move),
+                "history": term.get("history", []) + [move],
             }
         )
     return children
@@ -1440,7 +1777,7 @@ def expand_pair_term_by_antisymmetrizer(
                 "w_adj": term["w_adj"],
                 "w_remaining": term["w_remaining"],
                 "coeff": term["coeff"] * multiplier,
-                "history": extend_history(term, move),
+                "history": term.get("history", []) + [move],
             }
         )
     return children
@@ -1486,7 +1823,12 @@ def choose_pair_successors(
             choices.extend(("W", hg) for hg in term["w_remaining"])
         for side, hg in choices:
             try:
-                children = expand_pair_term(term, side, hg)
+                children = expand_pair_term(
+                    term,
+                    side,
+                    hg,
+                    node_xy=x_node_xy if side == "X" else w_node_xy,
+                )
             except ValueError:
                 continue
             next_terms = active[:term_idx] + active[term_idx + 1 :] + children
@@ -1609,7 +1951,7 @@ def evaluate_pair_state_by_coloring(
                 "reason": str(exc),
             }
         evaluation["coeff"] = term["coeff"]
-        evaluation["history"] = term_history(term)
+        evaluation["history"] = term.get("history", [])
         evaluation["common_forks"] = []
         evaluation["source_adj"] = term["x_adj"]
         evaluation["source_hourglasses"] = term["x_remaining"]
@@ -1619,7 +1961,8 @@ def evaluate_pair_state_by_coloring(
         if evaluation["status"] != "computed":
             evaluation["term_value"] = None
             return None
-        evaluation["term_value"] = term["coeff"] * int(evaluation["coloring_count"])
+        signed_count = int(evaluation.get("signed_coloring_count", evaluation["coloring_count"]))
+        evaluation["term_value"] = term["coeff"] * signed_count
         total += int(evaluation["term_value"])
         evaluations.append(evaluation)
     return total, evaluations
@@ -1684,6 +2027,12 @@ def evaluate_pair_by_x_component_coloring(
             "status": "not_computed",
             "reason": "X does not have exactly four boundary-bearing connected components",
         }
+    orientation_sign = plucker_product_orientation_sign(x_adj, x_boundary_labels, r=r)
+    if orientation_sign is None:
+        return {
+            "status": "not_computed",
+            "reason": "X components do not carry four tagged Plucker-claw orientations",
+        }
     count = count_consistent_colorings(
         w_adj,
         w_boundary_labels,
@@ -1696,6 +2045,8 @@ def evaluate_pair_by_x_component_coloring(
         "source_side": "X_components",
         "boundary_color_by_label": condition,
         "coloring_count": count,
+        "source_orientation_sign": orientation_sign,
+        "signed_coloring_count": orientation_sign * count,
     }
 
 
@@ -1720,7 +2071,7 @@ def evaluate_pair_state_by_x_component_coloring(
             r=r,
         )
         evaluation["coeff"] = term["coeff"]
-        evaluation["history"] = term_history(term)
+        evaluation["history"] = term.get("history", [])
         evaluation["common_forks"] = []
         evaluation["source_adj"] = term["x_adj"]
         evaluation["source_hourglasses"] = term["x_remaining"]
@@ -1730,7 +2081,8 @@ def evaluate_pair_state_by_x_component_coloring(
         if evaluation["status"] != "computed":
             evaluation["term_value"] = None
             return None
-        evaluation["term_value"] = term["coeff"] * int(evaluation["coloring_count"])
+        signed_count = int(evaluation.get("signed_coloring_count", evaluation["coloring_count"]))
+        evaluation["term_value"] = term["coeff"] * signed_count
         total += int(evaluation["term_value"])
         evaluations.append(evaluation)
     return total, evaluations
@@ -1787,15 +2139,26 @@ def replay_pair_history(
                 raise ValueError(f"Unknown branch side in history: {side!r}")
             continue
         key = tuple(sorted(int(x) for x in move["hourglass"]))
+        forced_untwists = move.get("untwists") if "untwists" in move else None
         if side == "X":
             hg = next(h for h in current_xh if tuple(sorted((int(h["white"]), int(h["black"])))) == key)
-            current_x = smooth_one_hourglass(current_x, hg, smoothing)
+            current_x = smooth_one_hourglass(
+                current_x,
+                hg,
+                smoothing,
+                forced_untwists=forced_untwists,
+            )
             current_xh = remaining_after_move(current_xh, hg)
             current_x = drop_nonreciprocal_references(current_x)
             current_xh = clean_hourglasses_for_adj(current_x, current_xh)
         elif side == "W":
             hg = next(h for h in current_wh if tuple(sorted((int(h["white"]), int(h["black"])))) == key)
-            current_w = smooth_one_hourglass(current_w, hg, smoothing)
+            current_w = smooth_one_hourglass(
+                current_w,
+                hg,
+                smoothing,
+                forced_untwists=forced_untwists,
+            )
             current_wh = remaining_after_move(current_wh, hg)
             current_w = drop_nonreciprocal_references(current_w)
             current_wh = clean_hourglasses_for_adj(current_w, current_wh)
@@ -1847,7 +2210,7 @@ def evaluate_active_terms_by_expanding_w_then_coloring(
             x_hourglasses,
             w_adj,
             w_hourglasses,
-            term_history(term),
+            term.get("history", []),
         )
         x_now = drop_nonreciprocal_references(x_now)
         w_now = drop_nonreciprocal_references(w_now)
@@ -1864,8 +2227,18 @@ def evaluate_active_terms_by_expanding_w_then_coloring(
             }
 
         condition = component_boundary_condition_from_x(x_now, x_boundary_labels, r=r)
+        orientation_sign = plucker_product_orientation_sign(x_now, x_boundary_labels, r=r)
+        if condition is not None and orientation_sign is None:
+            return None, {
+                "status": "not_computed",
+                "w_expanded_terms": expanded_terms,
+                "w_expanded_fork_killed": fork_killed,
+                "w_direct_colored_terms": direct_colored_terms,
+                "branch_evaluations": branch_evaluations,
+                "reason": "X components have no recoverable tagged Plucker-claw orientation",
+            }
 
-        stack = [(w_now, w_now_hgs, int(term["coeff"]), list(term_history(term)))]
+        stack = [(w_now, w_now_hgs, int(term["coeff"]), list(term.get("history", [])))]
         branch_expansions = 0
         while stack:
             current_w, current_wh, coeff, current_history = stack.pop()
@@ -1910,14 +2283,17 @@ def evaluate_active_terms_by_expanding_w_then_coloring(
                         r=r,
                     )
                     count = int(coloring["count"])
-                    total += coeff * count
+                    signed_count = int(orientation_sign) * count
+                    total += coeff * signed_count
                     direct_colored_terms += 1
                     branch_evaluations.append(
                         {
                             "status": "computed_direct_w_hourglass_coloring",
                             "coeff": coeff,
                             "coloring_count": count,
-                            "term_value": coeff * count,
+                            "source_orientation_sign": orientation_sign,
+                            "signed_coloring_count": signed_count,
+                            "term_value": coeff * signed_count,
                             "source_side": "X_components",
                             "boundary_color_by_label": condition,
                             "sample_edge_colors": coloring.get("sample_edge_colors", []),
@@ -1975,14 +2351,17 @@ def evaluate_active_terms_by_expanding_w_then_coloring(
                         r=r,
                     )
                     count = int(coloring["count"])
-                    total += coeff * count
+                    signed_count = int(orientation_sign) * count
+                    total += coeff * signed_count
                     direct_colored_terms += 1
                     branch_evaluations.append(
                         {
                             "status": "computed_direct_w_hourglass_coloring",
                             "coeff": coeff,
                             "coloring_count": count,
-                            "term_value": coeff * count,
+                            "source_orientation_sign": orientation_sign,
+                            "signed_coloring_count": signed_count,
+                            "term_value": coeff * signed_count,
                             "source_side": "X_components",
                             "boundary_color_by_label": condition,
                             "sample_edge_colors": coloring.get("sample_edge_colors", []),
@@ -2002,7 +2381,12 @@ def evaluate_active_terms_by_expanding_w_then_coloring(
                 hg = current_wh[0]
                 for smoothing in ("crossing", "parallel"):
                     try:
-                        child_w = smooth_one_hourglass(current_w, hg, smoothing)
+                        child_w, embedding = smooth_one_hourglass_embedded(
+                            current_w,
+                            hg,
+                            smoothing,
+                            node_xy=w_node_xy,
+                        )
                     except ValueError:
                         continue
                     child_wh = remaining_after_move(current_wh, hg)
@@ -2012,15 +2396,15 @@ def evaluate_active_terms_by_expanding_w_then_coloring(
                         "side": "W",
                         "hourglass": [int(hg["white"]), int(hg["black"])],
                         "smoothing": smoothing,
-                        "coefficient_multiplier": move_multiplier(smoothing),
                         "local_case": hg.get("local_case", ""),
                         "phase": "w_expansion_fallback",
+                        **embedding,
                     }
                     stack.append(
                         (
                             child_w,
                             child_wh,
-                            coeff * move_multiplier(smoothing),
+                            coeff * int(embedding["coefficient_multiplier"]),
                             current_history + [move],
                         )
                     )
@@ -2048,13 +2432,16 @@ def evaluate_active_terms_by_expanding_w_then_coloring(
                 r=r,
             )
             count = int(coloring["count"])
-            total += coeff * count
+            signed_count = int(orientation_sign) * count
+            total += coeff * signed_count
             branch_evaluations.append(
                 {
                     "status": "computed",
                     "coeff": coeff,
                     "coloring_count": count,
-                    "term_value": coeff * count,
+                    "source_orientation_sign": orientation_sign,
+                    "signed_coloring_count": signed_count,
+                    "term_value": coeff * signed_count,
                     "source_side": "X_components",
                     "boundary_color_by_label": condition,
                     "sample_edge_colors": coloring.get("sample_edge_colors", []),
@@ -2230,7 +2617,7 @@ def choose_x_resolution_successors(
             continue
         for hg in term["x_remaining"]:
             try:
-                children = expand_pair_term(term, "X", hg)
+                children = expand_pair_term(term, "X", hg, node_xy=x_node_xy)
             except ValueError:
                 continue
             next_terms = active[:term_idx] + active[term_idx + 1 :] + children
@@ -2760,6 +3147,8 @@ def prove_pair_zero_allowing_w_wrench(
     allowed_forks: Optional[Set[frozenset[int]]] = None,
     beam_width: int = 80,
     max_steps: Optional[int] = None,
+    x_node_xy: Optional[NodeXY] = None,
+    w_node_xy: Optional[NodeXY] = None,
 ) -> Dict[str, Any]:
     if max_steps is None:
         max_steps = len(x_hourglasses) + (len(w_hourglasses) if allow_w_wrench else 0)
@@ -2803,6 +3192,8 @@ def prove_pair_zero_allowing_w_wrench(
                     w_boundary_labels,
                     allow_w_wrench=allow_w_wrench,
                     allowed_forks=allowed_forks,
+                    x_node_xy=x_node_xy,
+                    w_node_xy=w_node_xy,
                 )
             )
         if not candidates:
@@ -2843,7 +3234,8 @@ def prove_pair_zero_allowing_w_wrench(
             }
         evaluation["coeff"] = term["coeff"]
         if evaluation["status"] == "computed":
-            evaluation["term_value"] = term["coeff"] * int(evaluation["coloring_count"])
+            signed_count = int(evaluation.get("signed_coloring_count", evaluation["coloring_count"]))
+            evaluation["term_value"] = term["coeff"] * signed_count
             final_pairing_value = int(final_pairing_value or 0) + int(evaluation["term_value"])
         else:
             evaluation["term_value"] = None
@@ -2892,7 +3284,7 @@ def pair_active_term_summary(
         "w_forks": sorted([fork_to_list(f) for f in get_forks(term["w_adj"], w_boundary_labels)]),
         "x_remaining_hourglasses": len(term["x_remaining"]),
         "w_remaining_hourglasses": len(term["w_remaining"]),
-        "history": term_history(term),
+        "history": term.get("history", []),
         "x_edges": [list(edge) for edge in get_edge_tuple(term["x_adj"])],
         "w_edges": [list(edge) for edge in get_edge_tuple(term["w_adj"])],
     }
@@ -2952,6 +3344,52 @@ def plucker_product_components(
     if all_labels != list(range(1, r * r + 1)):
         return None
     return sorted(components, key=lambda labels: (min(labels), labels))
+
+
+def permutation_sign(values: List[int]) -> int:
+    """Return the sign of a permutation written in one-line notation."""
+    inversions = sum(
+        values[i] > values[j]
+        for i in range(len(values))
+        for j in range(i + 1, len(values))
+    )
+    return -1 if inversions % 2 else 1
+
+
+def plucker_product_orientation_sign(
+    adj: Adjacency,
+    boundary_labels: BoundaryLabels,
+    *,
+    r: int = 4,
+) -> Optional[int]:
+    """Return the tagged vertex sign of a product of Plucker claws.
+
+    The boundary set of a claw determines its canonical increasing order.  Its
+    actual incident-edge order starts at the stored tag and follows the
+    rotation system carried in ``adj``.  The local SL_r tensor sign is the sign
+    of the resulting permutation; the diagram sign is the product over claws.
+
+    For r=4, reading clockwise instead of counterclockwise has even parity, so
+    the convention used by ``effective_rotation_system`` gives the same sign.
+    """
+    components = plucker_product_components(adj, boundary_labels, r=r)
+    if components is None:
+        return None
+
+    sign = 1
+    for comp in graph_components(adj):
+        internal = [node for node in comp if node not in boundary_labels]
+        if len(internal) != 1:
+            return None
+        hub = internal[0]
+        ordered_neighbors = neighbor_list(adj[hub])
+        if len(ordered_neighbors) != r or any(node not in boundary_labels for node in ordered_neighbors):
+            return None
+        ordered_labels = [int(boundary_labels[node]) for node in ordered_neighbors]
+        canonical_labels = sorted(ordered_labels)
+        rank = {label: index + 1 for index, label in enumerate(canonical_labels)}
+        sign *= permutation_sign([rank[label] for label in ordered_labels])
+    return sign
 
 
 def boundary_condition_from_plucker_components(
@@ -3174,6 +3612,12 @@ def evaluate_pair_by_coloring(
     """
     x_components = plucker_product_components(x_adj, x_boundary_labels, r=r)
     if x_components is not None:
+        orientation_sign = plucker_product_orientation_sign(x_adj, x_boundary_labels, r=r)
+        if orientation_sign is None:
+            return {
+                "status": "not_computed",
+                "reason": "X Plucker factors have no recoverable tagged orientation",
+            }
         condition = boundary_condition_from_plucker_components(x_components)
         coloring = consistent_coloring_data(
             w_adj,
@@ -3188,6 +3632,8 @@ def evaluate_pair_by_coloring(
             "plucker_factors": x_components,
             "boundary_color_by_label": condition,
             "coloring_count": int(coloring["count"]),
+            "source_orientation_sign": orientation_sign,
+            "signed_coloring_count": orientation_sign * int(coloring["count"]),
             "sample_edge_colors": coloring.get("sample_edge_colors", []),
             "sample_hourglass_colors": coloring.get("sample_hourglass_colors", []),
             "hourglass_swap_quotient": coloring.get("hourglass_swap_quotient", True),
@@ -3195,6 +3641,12 @@ def evaluate_pair_by_coloring(
 
     w_components = plucker_product_components(w_adj, w_boundary_labels, r=r)
     if w_components is not None:
+        orientation_sign = plucker_product_orientation_sign(w_adj, w_boundary_labels, r=r)
+        if orientation_sign is None:
+            return {
+                "status": "not_computed",
+                "reason": "W Plucker factors have no recoverable tagged orientation",
+            }
         condition = boundary_condition_from_plucker_components(w_components)
         coloring = consistent_coloring_data(
             x_adj,
@@ -3209,6 +3661,8 @@ def evaluate_pair_by_coloring(
             "plucker_factors": w_components,
             "boundary_color_by_label": condition,
             "coloring_count": int(coloring["count"]),
+            "source_orientation_sign": orientation_sign,
+            "signed_coloring_count": orientation_sign * int(coloring["count"]),
             "sample_edge_colors": coloring.get("sample_edge_colors", []),
             "sample_hourglass_colors": coloring.get("sample_hourglass_colors", []),
             "hourglass_swap_quotient": coloring.get("hourglass_swap_quotient", True),
@@ -3242,6 +3696,7 @@ def apply_wrench_expansion(
     prune: bool = False,
     ref_forks: Optional[Set[frozenset[int]]] = None,
     ref_direct: Optional[Set[frozenset[int]]] = None,
+    node_xy: Optional[NodeXY] = None,
 ) -> List[Dict[str, Any]]:
     if prune and should_prune(adj, boundary_labels, ref_forks or set(), ref_direct or set()):
         return []
@@ -3252,27 +3707,33 @@ def apply_wrench_expansion(
     hg = hourglasses[0]
     remaining = hourglasses[1:]
 
-    crossing_adj = smooth_one_hourglass(adj, hg, "crossing")
-    parallel_adj = smooth_one_hourglass(adj, hg, "parallel")
+    crossing_adj, crossing_meta = smooth_one_hourglass_embedded(
+        adj, hg, "crossing", node_xy=node_xy
+    )
+    parallel_adj, parallel_meta = smooth_one_hourglass_embedded(
+        adj, hg, "parallel", node_xy=node_xy
+    )
 
     return (
         apply_wrench_expansion(
             crossing_adj,
             remaining,
-            coeff,
+            coeff * int(crossing_meta["coefficient_multiplier"]),
             boundary_labels,
             prune=prune,
             ref_forks=ref_forks,
             ref_direct=ref_direct,
+            node_xy=node_xy,
         )
         + apply_wrench_expansion(
             parallel_adj,
             remaining,
-            -coeff,
+            coeff * int(parallel_meta["coefficient_multiplier"]),
             boundary_labels,
             prune=prune,
             ref_forks=ref_forks,
             ref_direct=ref_direct,
+            node_xy=node_xy,
         )
     )
 
@@ -3466,11 +3927,13 @@ def main() -> None:
 
     target_path = resolve_json_path(args.target, args.project_root)
     adj, boundary_labels, hourglasses = parse_web(target_path, left_endpoint=args.left_endpoint)
+    target_node_colors, target_node_xy = parse_web_metadata(target_path)
     hourglasses = sort_hourglasses_by_boundary_distance(adj, boundary_labels, hourglasses)
 
     if args.prove_pair_zero:
         reference_path = resolve_json_path(args.reference, args.project_root)
         ref_adj, ref_boundary_labels, ref_hourglasses = parse_web(reference_path, left_endpoint=args.left_endpoint)
+        ref_node_colors, ref_node_xy = parse_web_metadata(reference_path)
         ref_hourglasses = sort_hourglasses_by_boundary_distance(ref_adj, ref_boundary_labels, ref_hourglasses)
         target_forks = get_forks(ref_adj, ref_boundary_labels)
         if args.target_fork:
@@ -3494,6 +3957,8 @@ def main() -> None:
                 allowed_forks={requested_fork} if args.target_fork else None,
                 beam_width=args.beam_width,
                 max_steps=args.max_steps,
+                x_node_xy=target_node_xy,
+                w_node_xy=ref_node_xy,
             )
         else:
             proof = prove_pair_zero_by_wrench_and_forks(
@@ -3503,6 +3968,7 @@ def main() -> None:
                 target_forks,
                 beam_width=args.beam_width,
                 max_steps=args.max_steps,
+                x_node_xy=target_node_xy,
             )
         print(f"Target X: {target_path}")
         print(f"Reference W: {reference_path}")
@@ -3560,6 +4026,7 @@ def main() -> None:
             target_forks,
             beam_width=args.beam_width,
             max_depth=args.max_depth,
+            node_xy=target_node_xy,
         )
 
         print(f"Target X: {target_path}")
@@ -3609,6 +4076,7 @@ def main() -> None:
         prune=args.prune_with_reference,
         ref_forks=ref_forks,
         ref_direct=ref_direct,
+        node_xy=target_node_xy,
     )
     consolidated = consolidate_webs(expanded)
 
