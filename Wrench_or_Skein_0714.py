@@ -33,6 +33,20 @@ Hourglass = Dict[str, Any]
 NodeColors = Dict[int, str]
 NodeXY = Dict[int, Tuple[float, float]]
 
+
+class HourglassPorts(dict):
+    """Two live ordinary ports plus the original four-slot ribbon pattern.
+
+    The ordinary neighbors of an unexpanded hourglass endpoint can be rewired
+    by earlier relations, but their half-edge slots do not move.  Keeping the
+    slot pattern on the mapping avoids collapsing a tagged four-valent vertex
+    to an untagged ``top/bot`` pair.
+    """
+
+    def __init__(self, *args: Any, slot_pattern: Iterable[str] = (), **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.slot_pattern = tuple(str(item) for item in slot_pattern)
+
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_PROJECT_ROOTS = [
     Path(os.environ.get("PROBLEM3_ROOT", APP_DIR)).expanduser().resolve(),
@@ -74,8 +88,158 @@ def resolve_json_path(name_or_path: str, project_root: Optional[Path] = None) ->
     raise FileNotFoundError(f"Could not find JSON file: {name_or_path}")
 
 
+def tagged_hourglass_rotation_entries(node_id: int, rot_sys: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Rotate an hourglass endpoint so its canonical tag is the start gap.
+
+    The renderer's ``ccw_slot`` is a geometric cyclic order; slot zero is only
+    the first angle after the ``-pi/pi`` branch cut.  GPPSS Definition 6.3 puts
+    the tag in the sector between the two simple edges.  Consequently the
+    tag-started CCW order has the form
+
+        simple, hourglass strand, hourglass strand, simple.
+
+    This rotation is intrinsic and is unchanged if the same embedded graph is
+    redrawn or rigidly rotated in the disk.
+    """
+    entries = sorted(rot_sys[str(node_id)], key=lambda item: int(item["ccw_slot"]))
+    # A few small unit-test/legacy fixtures record only the two live simple
+    # ports.  Their listed order is already the only available tagged order.
+    if len(entries) == 2 and all(item.get("kind") == "ordinary" for item in entries):
+        return entries
+    if len(entries) != 4:
+        raise ValueError(f"Hourglass endpoint {node_id} should have four half-edge slots.")
+    ordinary_slots = [i for i, item in enumerate(entries) if item.get("kind") == "ordinary"]
+    if len(ordinary_slots) != 2:
+        raise ValueError(
+            f"Hourglass endpoint {node_id} should have two simple half-edges; "
+            f"found slots {ordinary_slots}."
+        )
+    starts = [
+        (i + 1) % 4
+        for i in ordinary_slots
+        if entries[(i + 1) % 4].get("kind") == "ordinary"
+    ]
+    if len(starts) != 1:
+        raise ValueError(
+            f"The two simple half-edges at hourglass endpoint {node_id} are not adjacent."
+        )
+    start = starts[0]
+    return entries[start:] + entries[:start]
+
+
+def _rotate_after_tag_gap(
+    entries: List[Dict[str, Any]],
+    first_index: int,
+    second_index: int,
+) -> List[Dict[str, Any]]:
+    """Rotate CCW entries so the indicated adjacent gap is the start gap."""
+    size = len(entries)
+    if (first_index + 1) % size == second_index:
+        start = second_index
+    elif (second_index + 1) % size == first_index:
+        start = first_index
+    else:
+        raise ValueError("A tag gap must lie between adjacent cyclic half-edges.")
+    return entries[start:] + entries[:start]
+
+
+def _trip2_ray_boundary_label(
+    start_node: int,
+    first_half_edge: Dict[str, Any],
+    *,
+    nodes: Dict[int, Dict[str, Any]],
+    edges: Dict[int, Dict[str, Any]],
+    rotation: Dict[int, List[Dict[str, Any]]],
+    boundary_label_by_node: Dict[int, int],
+) -> int:
+    """Follow one outward trip-2 ray from an internal vertex to the boundary."""
+    current = int(first_half_edge["neighbor"])
+    edge_id = int(first_half_edge["edge"])
+    strand = first_half_edge.get("strand")
+    if edges[edge_id].get("kind") == "hourglass" and strand is not None:
+        strand = 1 - int(strand)
+    incoming = (edge_id, strand)
+
+    for _ in range(1000):
+        if current in boundary_label_by_node:
+            return int(boundary_label_by_node[current])
+        local = rotation[current]
+        incoming_slot = next(
+            index
+            for index, half_edge in enumerate(local)
+            if (int(half_edge["edge"]), half_edge.get("strand")) == incoming
+        )
+        color = str(nodes[current].get("color", ""))
+        if color == "white":
+            direction = -1
+        elif color == "black":
+            direction = +1
+        else:
+            raise ValueError(f"Unexpected color at trip-2 vertex {current}: {color!r}.")
+        outgoing = local[(incoming_slot + 2 * direction) % len(local)]
+        edge_id = int(outgoing["edge"])
+        strand = outgoing.get("strand")
+        current = int(outgoing["neighbor"])
+        if edges[edge_id].get("kind") == "hourglass" and strand is not None:
+            strand = 1 - int(strand)
+        incoming = (edge_id, strand)
+    raise RuntimeError(f"Trip-2 ray from vertex {start_node} did not reach the boundary.")
+
+
+def canonical_tagged_rotation_system(data: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
+    """Reconstruct the GPPSS Definition 6.3 tags from the embedded web.
+
+    The JSON exporter stores a genuine CCW rotation system, but its slot zero
+    is just an angle-sort branch cut.  For a 2-hourglass endpoint the tag lies
+    between the simple edges.  At a vertex with four simple edges, the four
+    outward trip-2 rays end at four boundary vertices; the two rays adjacent
+    to the base-face sector are exactly those ending at the smallest and
+    largest boundary labels.  The base face is the face between ``b_n`` and
+    ``b_1`` (GPPSS Definition 4.18).
+    """
+    nodes = _as_int_key_map(data.get("nodes", []))
+    edges = {int(edge["id"]): edge for edge in data.get("edges", [])}
+    source = {
+        int(node_id): sorted(entries, key=lambda item: int(item["ccw_slot"]))
+        for node_id, entries in data.get("effective_rotation_system", {}).items()
+    }
+    boundary_label_by_node = {
+        int(item["node"]): int(item["label"])
+        for item in data.get("boundary", [])
+    }
+    result: Dict[str, List[Dict[str, Any]]] = {}
+    for node_id, source_entries in source.items():
+        entries = copy.deepcopy(source_entries)
+        kinds = [str(item.get("kind", "")) for item in entries]
+        if len(entries) == 4 and kinds.count("hourglass_strand") == 2 and kinds.count("ordinary") == 2:
+            # Reuse the intrinsic hourglass-endpoint rule above.
+            temporary = {str(node_id): entries}
+            tagged = tagged_hourglass_rotation_entries(node_id, temporary)
+        elif len(entries) == 4 and all(kind == "ordinary" for kind in kinds):
+            endpoints = [
+                _trip2_ray_boundary_label(
+                    node_id,
+                    half_edge,
+                    nodes=nodes,
+                    edges=edges,
+                    rotation=source,
+                    boundary_label_by_node=boundary_label_by_node,
+                )
+                for half_edge in entries
+            ]
+            low_index = endpoints.index(min(endpoints))
+            high_index = endpoints.index(max(endpoints))
+            tagged = _rotate_after_tag_gap(entries, low_index, high_index)
+        else:
+            tagged = entries
+        for slot, item in enumerate(tagged):
+            item["ccw_slot"] = slot
+        result[str(node_id)] = tagged
+    return result
+
+
 def ordinary_neighbors_from_rotation(node_id: int, rot_sys: Dict[str, Any]) -> List[int]:
-    entries = sorted(rot_sys[str(node_id)], key=lambda item: item["ccw_slot"])
+    entries = tagged_hourglass_rotation_entries(node_id, rot_sys)
     ordinary = [int(item["neighbor"]) for item in entries if item["kind"] == "ordinary"]
     if len(ordinary) != 2:
         raise ValueError(
@@ -83,6 +247,45 @@ def ordinary_neighbors_from_rotation(node_id: int, rot_sys: Dict[str, Any]) -> L
             f"found {ordinary}."
         )
     return ordinary
+
+
+def hourglass_slot_pattern(
+    node_id: int,
+    other_endpoint: int,
+    top_neighbor: int,
+    bot_neighbor: int,
+    rot_sys: Dict[str, Any],
+) -> Tuple[str, ...]:
+    """Return the source tag-started CCW slots using live-port tokens.
+
+    ``effective_rotation_system`` contains four slots at an hourglass
+    endpoint: two ordinary ports and the two distinct hourglass strands.  The
+    old parser retained only the ordinary neighbors and therefore lost both
+    the tag position and the strand order.
+    """
+    entries = tagged_hourglass_rotation_entries(node_id, rot_sys)
+    pattern: List[str] = []
+    for entry in entries:
+        kind = str(entry.get("kind", ""))
+        neighbor = int(entry["neighbor"])
+        if kind == "ordinary":
+            if neighbor == int(top_neighbor):
+                pattern.append("top")
+            elif neighbor == int(bot_neighbor):
+                pattern.append("bot")
+            else:
+                raise ValueError(
+                    f"Unexpected ordinary neighbor {neighbor} at hourglass endpoint {node_id}."
+                )
+        elif kind == "hourglass_strand" and neighbor == int(other_endpoint):
+            pattern.append(f"strand:{int(entry.get('strand', 0))}")
+        else:
+            raise ValueError(
+                f"Unexpected rotation entry at hourglass endpoint {node_id}: {entry}."
+            )
+    if len(pattern) != 4 or sorted(pattern) != ["bot", "strand:0", "strand:1", "top"]:
+        raise ValueError(f"Invalid four-slot hourglass rotation at node {node_id}: {pattern}.")
+    return tuple(pattern)
 
 
 def _node_xy(node_id: int, nodes: Dict[int, Dict[str, Any]]) -> Tuple[float, float]:
@@ -109,13 +312,12 @@ def orient_hourglass_ports(
     left_endpoint: str,
     local_case: str = "",
 ) -> Hourglass:
-    """Name the four ports around one hourglass.
+    """Name the four ports from the source tagged rotation system.
 
-    The top/bottom split is geometric: use the line from the chosen left
-    endpoint to the chosen right endpoint as the local horizontal axis.  The
-    two ordinary neighbors on each side are then ordered by their projection on
-    the perpendicular axis.  This avoids relying on a fragile rotation-slot
-    offset and makes the Figure 4 pairing explicit.
+    Figure 42 is a ribbon/tensor-diagram identity.  Its two pairings are
+    determined by the tag-started cyclic orders at the white and black
+    endpoints, never by where a layout happens to draw those vertices.
+    ``top``/``bot`` are retained as compatibility names for port 0/port 1.
     """
     if left_endpoint not in {"white", "black"}:
         raise ValueError("left_endpoint must be 'white' or 'black'.")
@@ -123,40 +325,24 @@ def orient_hourglass_ports(
     left = white if left_endpoint == "white" else black
     right = black if left_endpoint == "white" else white
 
-    lx, ly = _node_xy(left, nodes)
-    rx, ry = _node_xy(right, nodes)
-    ax, ay = rx - lx, ry - ly
-    norm = math.hypot(ax, ay)
-    if norm == 0:
-        raise ValueError(f"Hourglass endpoints {white}, {black} have identical coordinates.")
-    perp = (-ay / norm, ax / norm)
-
-    left_neighbors = ordinary_neighbors_from_rotation(left, rot_sys)
-    right_neighbors = ordinary_neighbors_from_rotation(right, rot_sys)
-
-    left_sorted = sorted(
-        left_neighbors,
-        key=lambda n: _dot_with_perp(left, n, perp, nodes),
-        reverse=True,
-    )
-    # The opposite endpoint sees the local picture from the other side of the
-    # hourglass. Reverse its perpendicular ordering so the local top/bottom
-    # names are paired consistently when the replacement strands cross the
-    # hourglass region.
-    right_sorted = sorted(
-        right_neighbors,
-        key=lambda n: _dot_with_perp(right, n, perp, nodes),
-    )
+    white_ports = ordinary_neighbors_from_rotation(white, rot_sys)
+    black_ports = ordinary_neighbors_from_rotation(black, rot_sys)
+    left_ports = white_ports if left == white else black_ports
+    right_ports = black_ports if right == black else white_ports
 
     ports = {
         "white": white,
         "black": black,
         "left": left,
         "right": right,
-        "left_top": left_sorted[0],
-        "left_bot": left_sorted[1],
-        "right_top": right_sorted[0],
-        "right_bot": right_sorted[1],
+        "left_top": left_ports[0],
+        "left_bot": left_ports[1],
+        "right_top": right_ports[0],
+        "right_bot": right_ports[1],
+        "white_port0": white_ports[0],
+        "white_port1": white_ports[1],
+        "black_port0": black_ports[0],
+        "black_port1": black_ports[1],
         "left_endpoint": left_endpoint,
         "local_case": local_case,
     }
@@ -181,9 +367,10 @@ def parse_web(
         )
 
     nodes = _as_int_key_map(data["nodes"])
-    rot_sys = data.get("effective_rotation_system", {})
-    if not rot_sys:
+    source_rot_sys = data.get("effective_rotation_system", {})
+    if not source_rot_sys:
         raise ValueError(f"{filepath} has no effective_rotation_system.")
+    rot_sys = canonical_tagged_rotation_system(data)
 
     boundary_labels = {int(b["node"]): int(b["label"]) for b in data["boundary"]}
     adj: Adjacency = {int(n["id"]): [] for n in data["nodes"]}
@@ -197,8 +384,21 @@ def parse_web(
         local_case = str(nodes[white].get("local_case") or nodes[black].get("local_case") or "")
         hg = orient_hourglass_ports(white, black, nodes, rot_sys, left_endpoint, local_case)
         hourglasses.append(hg)
-        adj[white] = {"top": None, "bot": None}
-        adj[black] = {"top": None, "bot": None}
+        # Fill the live neighbors after ordinary edges have been read, while
+        # retaining the complete tagged four-slot source rotation now.
+        for endpoint, other in ((white, black), (black, white)):
+            side = "left" if endpoint == int(hg["left"]) else "right"
+            pattern = hourglass_slot_pattern(
+                endpoint,
+                other,
+                int(hg[f"{side}_top"]),
+                int(hg[f"{side}_bot"]),
+                rot_sys,
+            )
+            adj[endpoint] = HourglassPorts(
+                {"top": None, "bot": None},
+                slot_pattern=pattern,
+            )
 
     for edge in data["edges"]:
         if edge.get("double", False):
@@ -210,12 +410,11 @@ def parse_web(
             adj[v].append(u)
 
     # For an even-valent tensor diagram, the cyclic order needs a distinguished
-    # starting half-edge (the tag).  The JSON rotation system already gives us
-    # both pieces of data: ``ccw_slot == 0`` is the stored tag and increasing
-    # slots give the cyclic order.  Keep that order in the adjacency lists so
-    # local rewrites can transport it simply by replacing a neighbor in place.
-    # Iterating the raw edge array here used to retain edge-id order instead;
-    # that loses the SL4 vertex sign after a sequence of wrench moves.
+    # starting half-edge (the tag).  ``canonical_tagged_rotation_system``
+    # reconstructs that start from the GPPSS base-face/trip-2 convention; the
+    # raw exporter only stored an unbased cyclic order.  Keep the reconstructed
+    # order in adjacency lists so local rewrites transport it by replacing a
+    # neighbor in place.
     for node, neighbors in list(adj.items()):
         if not isinstance(neighbors, list) or not neighbors:
             continue
@@ -552,7 +751,7 @@ def detect_figure43_moves(
     added as separate RHS constructors once their port-level rewrites are
     specified.
     """
-    if not node_colors or not node_xy:
+    if not node_colors:
         return []
     ordinary = ordinary_edge_pairs(adj)
     hourglass_pairs = _hourglass_pairs(remaining_hourglasses)
@@ -578,31 +777,58 @@ def detect_figure43_moves(
     matches: List[Dict[str, Any]] = []
     seen: Set[Tuple[int, int, int, int]] = set()
     for quad in candidates:
-        if any(v not in node_xy or v not in node_colors for v in quad):
+        if any(v not in node_colors for v in quad):
             continue
-        ordered = _ordered_cycle_vertices(quad, node_xy)
+        # Choose the local cycle from its edge types and vertex colors, never
+        # from screen coordinates.  The canonical order is
+        # black --ordinary-- white --hourglass-- black --ordinary-- white.
+        # Reversing or rotating this tuple leaves both RHS pairings unchanged.
+        valid_orders: List[Tuple[int, int, int, int]] = []
+        for candidate in itertools.permutations(quad):
+            sides = [
+                _edge_pair(candidate[0], candidate[1]),
+                _edge_pair(candidate[1], candidate[2]),
+                _edge_pair(candidate[2], candidate[3]),
+                _edge_pair(candidate[3], candidate[0]),
+            ]
+            if not all(side in usable for side in sides):
+                continue
+            side_types = tuple("hourglass" if side in hourglass_pairs else "ordinary" for side in sides)
+            colors = tuple(node_colors.get(v, "") for v in candidate)
+            if side_types == ("ordinary", "hourglass", "ordinary", "hourglass") and colors == (
+                "black",
+                "white",
+                "black",
+                "white",
+            ):
+                valid_orders.append(tuple(int(v) for v in candidate))
+        if not valid_orders:
+            continue
+        ordered = list(min(valid_orders))
+        if _edge_pair(ordered[0], ordered[2]) in usable or _edge_pair(ordered[1], ordered[3]) in usable:
+            continue
         sides = [
             _edge_pair(ordered[0], ordered[1]),
             _edge_pair(ordered[1], ordered[2]),
             _edge_pair(ordered[2], ordered[3]),
             _edge_pair(ordered[3], ordered[0]),
         ]
-        if not all(side in usable for side in sides):
-            continue
-        if _edge_pair(ordered[0], ordered[2]) in usable or _edge_pair(ordered[1], ordered[3]) in usable:
-            continue
         side_types = tuple("hourglass" if side in hourglass_pairs else "ordinary" for side in sides)
         colors = tuple(node_colors.get(v, "") for v in ordered)
-        if side_types != ("ordinary", "hourglass", "ordinary", "hourglass"):
-            continue
-        if colors != ("black", "white", "black", "white"):
-            continue
         ports = _figure43_external_ports(adj, *ordered)
         if ports is None:
             continue
         rhs_terms = [
-            {"smoothing": "horizontal", "coefficient_multiplier": 1},
-            {"smoothing": "vertical", "coefficient_multiplier": -2},
+            {
+                "smoothing": "horizontal",
+                "coefficient_multiplier": 1,
+                "tag_transport_multiplier": 1,
+            },
+            {
+                "smoothing": "vertical",
+                "coefficient_multiplier": -2,
+                "tag_transport_multiplier": -1,
+            },
         ]
         if not all(
             _figure43_pairings_are_bipartite(
@@ -790,31 +1016,29 @@ ANTISYMMETRIZER_TERMS: List[Tuple[Tuple[int, int, int], int]] = [
 
 
 def _ordered_ports_across_edge(
+    adj: Adjacency,
     center: int,
     opposite: int,
     ports: Iterable[int],
     node_xy: Optional[NodeXY],
 ) -> List[int]:
+    """Read the three outside ports from the tagged cyclic order at center.
+
+    Starting immediately after the center-to-opposite half-edge gives opposite
+    orders at the two ends of an embedded edge, exactly as the antisymmetrizer
+    requires.  ``node_xy`` is retained only for API compatibility; drawings
+    must never select an algebraic permutation.
+    """
     ports = [int(port) for port in ports]
-    if not node_xy or center not in node_xy or opposite not in node_xy:
-        return sorted(ports)
-    cx, cy = node_xy[center]
-    ox, oy = node_xy[opposite]
-    ax, ay = ox - cx, oy - cy
-    norm = math.hypot(ax, ay)
-    if norm == 0:
-        return sorted(ports)
-    perp = (-ay / norm, ax / norm)
-
-    def key(port: int) -> Tuple[float, float, int]:
-        if port not in node_xy:
-            return (0.0, 0.0, port)
-        px, py = node_xy[port]
-        proj = (px - cx) * perp[0] + (py - cy) * perp[1]
-        along = (px - cx) * ax / norm + (py - cy) * ay / norm
-        return (-proj, along, port)
-
-    return sorted(ports, key=key)
+    cyclic = [int(port) for port in neighbor_list(adj.get(center, []))]
+    if opposite not in cyclic:
+        raise ValueError(f"Missing opposite half-edge {center}-{opposite} in cyclic order.")
+    start = cyclic.index(opposite)
+    rotated = cyclic[start + 1 :] + cyclic[:start]
+    ordered = [port for port in rotated if port in set(ports)]
+    if len(ordered) != 3 or set(ordered) != set(ports):
+        raise ValueError(f"Could not recover three tagged ports around {center}-{opposite}.")
+    return ordered
 
 
 def _all_antisym_pairings_are_bipartite(
@@ -868,8 +1092,8 @@ def detect_antisymmetrizer_moves(
                 continue
             if len(set(input_ports + output_ports)) != 6:
                 continue
-            input_ports = _ordered_ports_across_edge(white, black, input_ports, node_xy)
-            output_ports = _ordered_ports_across_edge(black, white, output_ports, node_xy)
+            input_ports = _ordered_ports_across_edge(adj, white, black, input_ports, node_xy)
+            output_ports = _ordered_ports_across_edge(adj, black, white, output_ports, node_xy)
             if not _all_antisym_pairings_are_bipartite(input_ports, output_ports, node_colors):
                 continue
             matches.append(
@@ -884,6 +1108,7 @@ def detect_antisymmetrizer_moves(
                         {
                             "permutation": list(perm),
                             "coefficient_multiplier": coeff,
+                            "tag_transport_multiplier": -1,
                             "smoothing": "perm_" + "".join(str(x) for x in perm),
                         }
                         for perm, coeff in ANTISYMMETRIZER_TERMS
@@ -930,15 +1155,22 @@ def smooth_one_hourglass_embedded(
     smoothing: str,
     *,
     node_xy: Optional[NodeXY] = None,
+    boundary_labels: Optional[BoundaryLabels] = None,
     forced_untwists: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[Adjacency, Dict[str, Any]]:
-    """Smooth one wrench while transporting its tagged planar embedding.
+    """Smooth one wrench while transporting its tagged ribbon embedding.
 
-    Replacement edges are represented by cubics tangent to the deleted edges
-    at both leaves.  If such an edge is twisted around another edge incident to
-    the same leaf, the two half-edge slots are transposed and the branch gains
-    a factor of ``-1``.  ``forced_untwists`` is used when replaying a stored
-    branch, making history replay independent of drawing coordinates.
+    Each replacement edge initially inherits the exact half-edge slot occupied
+    by the deleted wrench edge at both leaves.  There is one further ribbon
+    correction: if a leaf has an additional incident edge whose other endpoint
+    lies cyclically between the two opposite-colour leaves of the wrench, the
+    replacement and additional edge are untwisted.  This transposes two local
+    slots and contributes ``-1``.  These are precisely the A-E, B-E, C-F, and
+    D-F shared-leaf obstructions; arbitrary crossings between display curves do
+    not affect the coefficient.
+
+    ``forced_untwists`` replays the recorded combinatorial transpositions and
+    keeps saved branch pages independent of later drawing changes.
     """
     if smoothing not in {"crossing", "parallel"}:
         raise ValueError("smoothing must be 'crossing' or 'parallel'.")
@@ -956,35 +1188,25 @@ def smooth_one_hourglass_embedded(
 
     # Important: read the current ports from adj, not just the original cached
     # ports in hg. Earlier wrench moves may have rewired a neighboring endpoint.
-    lt, lb = int(adj[left]["top"]), int(adj[left]["bot"])
-    rt, rb = int(adj[right]["top"]), int(adj[right]["bot"])
+    white = int(hg["white"])
+    black = int(hg["black"])
+    w0, w1 = int(adj[white]["top"]), int(adj[white]["bot"])
+    b0, b1 = int(adj[black]["top"]), int(adj[black]["bot"])
 
     if smoothing == "crossing":
-        pairings = [(lt, left, rb, right), (lb, left, rt, right)]
+        pairings = [(w0, white, b0, black), (w1, white, b1, black)]
     else:
-        # Parallel term in the wrench relation: both replacement edges run
-        # across the hourglass region without using the diagonal splice.
-        pairings = [(lt, left, rt, right), (lb, left, rb, right)]
+        pairings = [(w0, white, b1, black), (w1, white, b0, black)]
 
     new_adj = copy.deepcopy(adj)
     if smoothing == "crossing":
-        splice_pair(new_adj, left, lt, right, rb)
-        splice_pair(new_adj, left, lb, right, rt)
+        splice_pair(new_adj, white, w0, black, b0)
+        splice_pair(new_adj, white, w1, black, b1)
     else:
-        splice_pair(new_adj, left, lt, right, rt)
-        splice_pair(new_adj, left, lb, right, rb)
-
-    black_leaves = [int(v) for v in neighbor_list(adj[int(hg["white"])] if "white" in hg else [])]
-    white_leaves = [int(v) for v in neighbor_list(adj[int(hg["black"])] if "black" in hg else [])]
-    if len(black_leaves) != 2 or len(white_leaves) != 2:
-        # The current left/right ports are authoritative after earlier moves.
-        if int(hg.get("white", -1)) == left:
-            black_leaves, white_leaves = [lt, lb], [rt, rb]
-        else:
-            black_leaves, white_leaves = [rt, rb], [lt, lb]
+        splice_pair(new_adj, white, w0, black, b1)
+        splice_pair(new_adj, white, w1, black, b0)
 
     curves: Dict[Tuple[int, int], List[Tuple[float, float]]] = {}
-    tangent_endpoint: Dict[Tuple[int, int], Dict[int, int]] = {}
     if node_xy:
         for first_port, first_endpoint, second_port, second_endpoint in pairings:
             edge = _edge_pair(first_port, second_port)
@@ -996,41 +1218,121 @@ def smooth_one_hourglass_embedded(
                     second_endpoint,
                     node_xy,
                 )
-                tangent_endpoint[edge] = {
-                    first_port: first_endpoint,
-                    second_port: second_endpoint,
-                }
+    tangent_endpoint: Dict[Tuple[int, int], Dict[int, int]] = {}
+    for first_port, first_endpoint, second_port, second_endpoint in pairings:
+        tangent_endpoint[_edge_pair(first_port, second_port)] = {
+            int(first_port): int(first_endpoint),
+            int(second_port): int(second_endpoint),
+        }
+
+    def boundary_support(start: int, cut: int) -> List[int]:
+        if not boundary_labels:
+            return []
+        seen = {int(cut)}
+        stack = [int(start)]
+        labels: Set[int] = set()
+        while stack:
+            node = stack.pop()
+            if node in seen:
+                continue
+            seen.add(node)
+            if node in boundary_labels:
+                labels.add(int(boundary_labels[node]))
+            stack.extend(
+                int(neighbor)
+                for neighbor in neighbor_list(adj.get(node, []))
+                if int(neighbor) not in seen
+            )
+        return sorted(labels)
+
+    def lies_on_short_boundary_arc(label: int, first: int, second: int) -> bool:
+        if not boundary_labels:
+            return False
+        modulus = max(int(value) for value in boundary_labels.values())
+        clockwise = (second - first) % modulus
+        counterclockwise = (first - second) % modulus
+        if clockwise == counterclockwise:
+            return False
+        if clockwise < counterclockwise:
+            return 0 < (label - first) % modulus < clockwise
+        return 0 < (first - label) % modulus < counterclockwise
 
     if forced_untwists is None:
-        untwists: List[Dict[str, Any]] = []
+        untwists = []
         seen_untwists: Set[Tuple[int, int, int]] = set()
         opposite_pair_by_leaf = {
-            **{leaf: tuple(white_leaves) for leaf in black_leaves},
-            **{leaf: tuple(black_leaves) for leaf in white_leaves},
+            **{leaf: (b0, b1) for leaf in (w0, w1)},
+            **{leaf: (w0, w1) for leaf in (b0, b1)},
+        }
+        endpoint_by_leaf = {
+            int(w0): int(white),
+            int(w1): int(white),
+            int(b0): int(black),
+            int(b1): int(black),
         }
         for first_port, first_endpoint, second_port, second_endpoint in pairings:
             for leaf, removed_endpoint, new_neighbor in (
                 (first_port, first_endpoint, second_port),
                 (second_port, second_endpoint, first_port),
             ):
-                new_edge = _edge_pair(leaf, new_neighbor)
-                curve = curves.get(new_edge)
-                for existing_neighbor in neighbor_list(adj.get(leaf, [])):
+                opposite_pair = opposite_pair_by_leaf[int(leaf)]
+                for existing_neighbor in neighbor_list(adj.get(int(leaf), [])):
                     if existing_neighbor in {removed_endpoint, new_neighbor, left, right}:
                         continue
-                    opposite_pair = opposite_pair_by_leaf.get(leaf, ())
-                    cyclic_issue = len(opposite_pair) == 2 and _cyclically_between_on_short_arc(
-                        existing_neighbor,
-                        opposite_pair[0],
-                        opposite_pair[1],
-                        node_xy,
-                    )
-                    geometric_crossing = bool(
+                    cyclic_issue = False
+                    if boundary_labels:
+                        first_support = boundary_support(
+                            int(opposite_pair[0]),
+                            endpoint_by_leaf[int(opposite_pair[0])],
+                        )
+                        second_support = boundary_support(
+                            int(opposite_pair[1]),
+                            endpoint_by_leaf[int(opposite_pair[1])],
+                        )
+                        extra_support = boundary_support(int(existing_neighbor), int(leaf))
+                        # The sign obstruction is a statement about the cyclic
+                        # boundary order, not the arbitrary plotted position of
+                        # an internal vertex.  Only use the test when the two
+                        # opposite leaves have unambiguous boundary anchors.
+                        cyclic_issue = bool(
+                            int(opposite_pair[0]) in boundary_labels
+                            and int(opposite_pair[1]) in boundary_labels
+                            and len(first_support) == 1
+                            and len(second_support) == 1
+                            and extra_support
+                            and all(
+                                lies_on_short_boundary_arc(
+                                    label,
+                                    first_support[0],
+                                    second_support[0],
+                                )
+                                for label in extra_support
+                            )
+                        )
+                    else:
+                        cyclic_issue = _cyclically_between_on_short_arc(
+                            int(existing_neighbor),
+                            int(opposite_pair[0]),
+                            int(opposite_pair[1]),
+                            node_xy,
+                        )
+                    new_edge = _edge_pair(int(leaf), int(new_neighbor))
+                    curve = curves.get(new_edge)
+                    shared_leaf_crossing = bool(
                         curve
                         and node_xy
-                        and _curve_crosses_incident_edge(curve, leaf, existing_neighbor, node_xy)
+                        and _curve_crosses_incident_edge(
+                            curve,
+                            int(leaf),
+                            int(existing_neighbor),
+                            node_xy,
+                        )
                     )
-                    if not cyclic_issue and not geometric_crossing:
+                    # With boundary data available the ribbon criterion is
+                    # combinatorial.  A crossing caused only by the current
+                    # drawing coordinates must not change a coefficient.
+                    geometric_issue = shared_leaf_crossing if not boundary_labels else False
+                    if not cyclic_issue and not geometric_issue:
                         continue
                     key = (int(leaf), int(new_neighbor), int(existing_neighbor))
                     if key in seen_untwists:
@@ -1044,7 +1346,7 @@ def smooth_one_hourglass_embedded(
                             "reason": (
                                 "cyclic_between_opposite_leaves"
                                 if cyclic_issue
-                                else "tangent_curves_cross"
+                                else "tangent_replacement_crosses_incident_edge"
                             ),
                         }
                     )
@@ -1057,7 +1359,8 @@ def smooth_one_hourglass_embedded(
         existing_neighbor = int(untwist["existing_neighbor"])
         swap_cyclic_neighbors(new_adj, vertex, new_neighbor, existing_neighbor)
 
-        # Draw the untwisted representative: exchange the two local tangents.
+        # Keep the branch picture consistent with the corrected ribbon order by
+        # exchanging the two local tangents.  This is display metadata only.
         if node_xy:
             new_edge = _edge_pair(vertex, new_neighbor)
             old_tangent = tangent_endpoint.get(new_edge, {}).get(vertex)
@@ -1069,20 +1372,19 @@ def smooth_one_hourglass_embedded(
                     points[2] = _point_toward(node_xy[vertex], node_xy[existing_neighbor])
                 existing_edge = _edge_pair(vertex, existing_neighbor)
                 if vertex <= existing_neighbor:
-                    existing_points = [
+                    curves[existing_edge] = [
                         node_xy[vertex],
                         _point_toward(node_xy[vertex], node_xy[old_tangent]),
                         _point_toward(node_xy[existing_neighbor], node_xy[vertex]),
                         node_xy[existing_neighbor],
                     ]
                 else:
-                    existing_points = [
+                    curves[existing_edge] = [
                         node_xy[existing_neighbor],
                         _point_toward(node_xy[existing_neighbor], node_xy[vertex]),
                         _point_toward(node_xy[vertex], node_xy[old_tangent]),
                         node_xy[vertex],
                     ]
-                curves[existing_edge] = existing_points
 
     del new_adj[left]
     del new_adj[right]
@@ -1096,6 +1398,7 @@ def smooth_one_hourglass_embedded(
         "untwist_multiplier": untwist_multiplier,
         "coefficient_multiplier": relation_multiplier * untwist_multiplier,
         "untwists": untwists,
+        "embedding_policy": "preserve_slots_then_shared_leaf_untwist",
         "replacement_edges": [[int(a), int(b)] for a, _, b, _ in pairings],
         "edge_curves": [_edge_curve_record(edge, points) for edge, points in sorted(curves.items())],
     }
@@ -1321,10 +1624,10 @@ def tagged_rotation_tuple(adj: Adjacency) -> Tuple[Tuple[Any, ...], ...]:
     """Return the tagged cyclic port order carried by an adjacency state.
 
     Ordinary vertex lists start at the stored tag and follow the rotation
-    system.  Hourglass endpoint dictionaries use the explicit top/bottom port
-    names.  This information is part of an SL4 tensor diagram, so two states
-    with the same unoriented edge set but different port order must not be
-    consolidated before their vertex signs are evaluated.
+    system.  Hourglass endpoint mappings carry both the live top/bottom
+    neighbors and the original four-slot pattern (including the two strands).
+    This information is part of an SL4 tensor diagram, so two states with the
+    same unoriented edge set but different port order must not be consolidated.
     """
     records: List[Tuple[Any, ...]] = []
     for node in sorted(adj):
@@ -1336,6 +1639,7 @@ def tagged_rotation_tuple(adj: Adjacency) -> Tuple[Tuple[Any, ...], ...]:
                     int(node),
                     int(neighbors["top"]) if neighbors.get("top") is not None else None,
                     int(neighbors["bot"]) if neighbors.get("bot") is not None else None,
+                    *tuple(getattr(neighbors, "slot_pattern", ("top", "bot"))),
                 )
             )
         else:
@@ -1656,6 +1960,7 @@ def expand_pair_term(
     hg: Hourglass,
     *,
     node_xy: Optional[NodeXY] = None,
+    boundary_labels: Optional[BoundaryLabels] = None,
 ) -> List[Dict[str, Any]]:
     if side not in {"X", "W"}:
         raise ValueError("side must be X or W.")
@@ -1663,7 +1968,11 @@ def expand_pair_term(
     for smoothing in ("crossing", "parallel"):
         if side == "X":
             child_x_adj, embedding = smooth_one_hourglass_embedded(
-                term["x_adj"], hg, smoothing, node_xy=node_xy
+                term["x_adj"],
+                hg,
+                smoothing,
+                node_xy=node_xy,
+                boundary_labels=boundary_labels,
             )
             child_x_remaining = remaining_after_move(term["x_remaining"], hg)
             child_w_adj = term["w_adj"]
@@ -1672,7 +1981,11 @@ def expand_pair_term(
             child_x_adj = term["x_adj"]
             child_x_remaining = term["x_remaining"]
             child_w_adj, embedding = smooth_one_hourglass_embedded(
-                term["w_adj"], hg, smoothing, node_xy=node_xy
+                term["w_adj"],
+                hg,
+                smoothing,
+                node_xy=node_xy,
+                boundary_labels=boundary_labels,
             )
             child_w_remaining = remaining_after_move(term["w_remaining"], hg)
         move = {
@@ -1705,7 +2018,9 @@ def expand_pair_term_by_figure43(
     children = []
     for rhs in match.get("rhs_terms", []):
         smoothing = str(rhs["smoothing"])
-        multiplier = int(rhs["coefficient_multiplier"])
+        paper_multiplier = int(rhs["coefficient_multiplier"])
+        tag_transport_multiplier = int(rhs.get("tag_transport_multiplier", 1))
+        effective_multiplier = paper_multiplier * tag_transport_multiplier
         if side == "X":
             child_x_adj, child_x_remaining = apply_figure43_move(
                 term["x_adj"],
@@ -1730,7 +2045,9 @@ def expand_pair_term_by_figure43(
             "rule": match["rule"],
             "vertices": [int(v) for v in match["vertices_top_right_bottom_left"]],
             "smoothing": smoothing,
-            "coefficient_multiplier": multiplier,
+            "paper_coefficient_multiplier": paper_multiplier,
+            "tag_transport_multiplier": tag_transport_multiplier,
+            "coefficient_multiplier": effective_multiplier,
         }
         children.append(
             {
@@ -1738,7 +2055,7 @@ def expand_pair_term_by_figure43(
                 "x_remaining": child_x_remaining,
                 "w_adj": child_w_adj,
                 "w_remaining": child_w_remaining,
-                "coeff": term["coeff"] * multiplier,
+                "coeff": term["coeff"] * effective_multiplier,
                 "history": term.get("history", []) + [move],
             }
         )
@@ -1769,6 +2086,7 @@ def expand_pair_term_by_antisymmetrizer(
             "permutation": permutation,
             "smoothing": str(rhs.get("smoothing", "perm_" + "".join(str(x) for x in permutation))),
             "coefficient_multiplier": multiplier,
+            "tag_transport_multiplier": int(rhs.get("tag_transport_multiplier", -1)),
         }
         children.append(
             {
@@ -1828,6 +2146,7 @@ def choose_pair_successors(
                     side,
                     hg,
                     node_xy=x_node_xy if side == "X" else w_node_xy,
+                    boundary_labels=x_boundary_labels if side == "X" else w_boundary_labels,
                 )
             except ValueError:
                 continue
@@ -1961,6 +2280,14 @@ def evaluate_pair_state_by_coloring(
         if evaluation["status"] != "computed":
             evaluation["term_value"] = None
             return None
+        source_side = str(evaluation.get("source_side", "X"))
+        source_orientation_sign = relation_history_orientation_sign(
+            term.get("history", []), source_side
+        )
+        evaluation["source_orientation_sign"] = source_orientation_sign
+        evaluation["signed_coloring_count"] = (
+            int(evaluation["coloring_count"]) * source_orientation_sign
+        )
         signed_count = int(evaluation.get("signed_coloring_count", evaluation["coloring_count"]))
         evaluation["term_value"] = term["coeff"] * signed_count
         total += int(evaluation["term_value"])
@@ -2027,12 +2354,11 @@ def evaluate_pair_by_x_component_coloring(
             "status": "not_computed",
             "reason": "X does not have exactly four boundary-bearing connected components",
         }
-    orientation_sign = plucker_product_orientation_sign(x_adj, x_boundary_labels, r=r)
-    if orientation_sign is None:
-        return {
-            "status": "not_computed",
-            "reason": "X components do not carry four tagged Plucker-claw orientations",
-        }
+    # Proposition 2.20 gives an unsigned count after the terminal component
+    # graph has been put in canonical Plucker-factor orientation.  Our stored
+    # tagged component graph need not already have that orientation, so apply
+    # this conversion coefficient exactly once before using the unsigned count.
+    tag_orientation = plucker_product_orientation_sign(x_adj, x_boundary_labels, r=r)
     count = count_consistent_colorings(
         w_adj,
         w_boundary_labels,
@@ -2045,9 +2371,32 @@ def evaluate_pair_by_x_component_coloring(
         "source_side": "X_components",
         "boundary_color_by_label": condition,
         "coloring_count": count,
-        "source_orientation_sign": orientation_sign,
-        "signed_coloring_count": orientation_sign * count,
+        "source_orientation_sign": 1,
+        "diagnostic_tag_orientation": tag_orientation,
+        "signed_coloring_count": count,
     }
+
+
+def relation_history_orientation_sign(
+    history: Iterable[Dict[str, Any]],
+    source_side: str,
+) -> int:
+    """Return the canonical-tag conversion transported by applied relations.
+
+    Flattened terminal adjacency does not retain every tag motion.  Figure 43
+    and the white-black antisymmetrizer therefore record their transport signs
+    explicitly in branch history.  Only moves made on the terminal source side
+    contribute to its Plucker-product orientation.
+    """
+    side = str(source_side).upper()
+    sign = 1
+    for move in history:
+        if str(move.get("side", "X")).upper() != side:
+            continue
+        if move.get("phase") not in {"figure43", "antisymmetrizer"}:
+            continue
+        sign *= int(move.get("tag_transport_multiplier", 1))
+    return sign
 
 
 def evaluate_pair_state_by_x_component_coloring(
@@ -2081,6 +2430,13 @@ def evaluate_pair_state_by_x_component_coloring(
         if evaluation["status"] != "computed":
             evaluation["term_value"] = None
             return None
+        source_orientation_sign = relation_history_orientation_sign(
+            term.get("history", []), "X"
+        )
+        evaluation["source_orientation_sign"] = source_orientation_sign
+        evaluation["signed_coloring_count"] = (
+            int(evaluation["coloring_count"]) * source_orientation_sign
+        )
         signed_count = int(evaluation.get("signed_coloring_count", evaluation["coloring_count"]))
         evaluation["term_value"] = term["coeff"] * signed_count
         total += int(evaluation["term_value"])
@@ -2227,16 +2583,7 @@ def evaluate_active_terms_by_expanding_w_then_coloring(
             }
 
         condition = component_boundary_condition_from_x(x_now, x_boundary_labels, r=r)
-        orientation_sign = plucker_product_orientation_sign(x_now, x_boundary_labels, r=r)
-        if condition is not None and orientation_sign is None:
-            return None, {
-                "status": "not_computed",
-                "w_expanded_terms": expanded_terms,
-                "w_expanded_fork_killed": fork_killed,
-                "w_direct_colored_terms": direct_colored_terms,
-                "branch_evaluations": branch_evaluations,
-                "reason": "X components have no recoverable tagged Plucker-claw orientation",
-            }
+        tag_orientation = plucker_product_orientation_sign(x_now, x_boundary_labels, r=r)
 
         stack = [(w_now, w_now_hgs, int(term["coeff"]), list(term.get("history", [])))]
         branch_expansions = 0
@@ -2283,7 +2630,8 @@ def evaluate_active_terms_by_expanding_w_then_coloring(
                         r=r,
                     )
                     count = int(coloring["count"])
-                    signed_count = int(orientation_sign) * count
+                    source_orientation_sign = relation_history_orientation_sign(current_history, "X")
+                    signed_count = count * source_orientation_sign
                     total += coeff * signed_count
                     direct_colored_terms += 1
                     branch_evaluations.append(
@@ -2291,7 +2639,8 @@ def evaluate_active_terms_by_expanding_w_then_coloring(
                             "status": "computed_direct_w_hourglass_coloring",
                             "coeff": coeff,
                             "coloring_count": count,
-                            "source_orientation_sign": orientation_sign,
+                            "source_orientation_sign": source_orientation_sign,
+                            "diagnostic_tag_orientation": tag_orientation,
                             "signed_coloring_count": signed_count,
                             "term_value": coeff * signed_count,
                             "source_side": "X_components",
@@ -2313,7 +2662,9 @@ def evaluate_active_terms_by_expanding_w_then_coloring(
                 match = figure43_matches[0]
                 for rhs in match.get("rhs_terms", []):
                     smoothing = str(rhs["smoothing"])
-                    multiplier = int(rhs["coefficient_multiplier"])
+                    paper_multiplier = int(rhs["coefficient_multiplier"])
+                    tag_transport_multiplier = int(rhs.get("tag_transport_multiplier", 1))
+                    multiplier = paper_multiplier * tag_transport_multiplier
                     try:
                         child_w, child_wh = apply_figure43_move(current_w, current_wh, match, smoothing)
                     except ValueError:
@@ -2324,6 +2675,8 @@ def evaluate_active_terms_by_expanding_w_then_coloring(
                         "rule": match["rule"],
                         "vertices": [int(v) for v in match["vertices_top_right_bottom_left"]],
                         "smoothing": smoothing,
+                        "paper_coefficient_multiplier": paper_multiplier,
+                        "tag_transport_multiplier": tag_transport_multiplier,
                         "coefficient_multiplier": multiplier,
                     }
                     stack.append((child_w, child_wh, coeff * multiplier, current_history + [move]))
@@ -2351,7 +2704,8 @@ def evaluate_active_terms_by_expanding_w_then_coloring(
                         r=r,
                     )
                     count = int(coloring["count"])
-                    signed_count = int(orientation_sign) * count
+                    source_orientation_sign = relation_history_orientation_sign(current_history, "X")
+                    signed_count = count * source_orientation_sign
                     total += coeff * signed_count
                     direct_colored_terms += 1
                     branch_evaluations.append(
@@ -2359,7 +2713,8 @@ def evaluate_active_terms_by_expanding_w_then_coloring(
                             "status": "computed_direct_w_hourglass_coloring",
                             "coeff": coeff,
                             "coloring_count": count,
-                            "source_orientation_sign": orientation_sign,
+                            "source_orientation_sign": source_orientation_sign,
+                            "diagnostic_tag_orientation": tag_orientation,
                             "signed_coloring_count": signed_count,
                             "term_value": coeff * signed_count,
                             "source_side": "X_components",
@@ -2432,14 +2787,16 @@ def evaluate_active_terms_by_expanding_w_then_coloring(
                 r=r,
             )
             count = int(coloring["count"])
-            signed_count = int(orientation_sign) * count
+            source_orientation_sign = relation_history_orientation_sign(current_history, "X")
+            signed_count = count * source_orientation_sign
             total += coeff * signed_count
             branch_evaluations.append(
                 {
                     "status": "computed",
                     "coeff": coeff,
                     "coloring_count": count,
-                    "source_orientation_sign": orientation_sign,
+                    "source_orientation_sign": source_orientation_sign,
+                    "diagnostic_tag_orientation": tag_orientation,
                     "signed_coloring_count": signed_count,
                     "term_value": coeff * signed_count,
                     "source_side": "X_components",
@@ -2617,7 +2974,13 @@ def choose_x_resolution_successors(
             continue
         for hg in term["x_remaining"]:
             try:
-                children = expand_pair_term(term, "X", hg, node_xy=x_node_xy)
+                children = expand_pair_term(
+                    term,
+                    "X",
+                    hg,
+                    node_xy=x_node_xy,
+                    boundary_labels=x_boundary_labels,
+                )
             except ValueError:
                 continue
             next_terms = active[:term_idx] + active[term_idx + 1 :] + children
@@ -3234,6 +3597,14 @@ def prove_pair_zero_allowing_w_wrench(
             }
         evaluation["coeff"] = term["coeff"]
         if evaluation["status"] == "computed":
+            source_side = str(evaluation.get("source_side", "X"))
+            source_orientation_sign = relation_history_orientation_sign(
+                term.get("history", []), source_side
+            )
+            evaluation["source_orientation_sign"] = source_orientation_sign
+            evaluation["signed_coloring_count"] = (
+                int(evaluation["coloring_count"]) * source_orientation_sign
+            )
             signed_count = int(evaluation.get("signed_coloring_count", evaluation["coloring_count"]))
             evaluation["term_value"] = term["coeff"] * signed_count
             final_pairing_value = int(final_pairing_value or 0) + int(evaluation["term_value"])
@@ -3612,12 +3983,7 @@ def evaluate_pair_by_coloring(
     """
     x_components = plucker_product_components(x_adj, x_boundary_labels, r=r)
     if x_components is not None:
-        orientation_sign = plucker_product_orientation_sign(x_adj, x_boundary_labels, r=r)
-        if orientation_sign is None:
-            return {
-                "status": "not_computed",
-                "reason": "X Plucker factors have no recoverable tagged orientation",
-            }
+        tag_orientation = plucker_product_orientation_sign(x_adj, x_boundary_labels, r=r)
         condition = boundary_condition_from_plucker_components(x_components)
         coloring = consistent_coloring_data(
             w_adj,
@@ -3632,8 +3998,9 @@ def evaluate_pair_by_coloring(
             "plucker_factors": x_components,
             "boundary_color_by_label": condition,
             "coloring_count": int(coloring["count"]),
-            "source_orientation_sign": orientation_sign,
-            "signed_coloring_count": orientation_sign * int(coloring["count"]),
+            "source_orientation_sign": 1,
+            "diagnostic_tag_orientation": tag_orientation,
+            "signed_coloring_count": int(coloring["count"]),
             "sample_edge_colors": coloring.get("sample_edge_colors", []),
             "sample_hourglass_colors": coloring.get("sample_hourglass_colors", []),
             "hourglass_swap_quotient": coloring.get("hourglass_swap_quotient", True),
@@ -3641,12 +4008,7 @@ def evaluate_pair_by_coloring(
 
     w_components = plucker_product_components(w_adj, w_boundary_labels, r=r)
     if w_components is not None:
-        orientation_sign = plucker_product_orientation_sign(w_adj, w_boundary_labels, r=r)
-        if orientation_sign is None:
-            return {
-                "status": "not_computed",
-                "reason": "W Plucker factors have no recoverable tagged orientation",
-            }
+        tag_orientation = plucker_product_orientation_sign(w_adj, w_boundary_labels, r=r)
         condition = boundary_condition_from_plucker_components(w_components)
         coloring = consistent_coloring_data(
             x_adj,
@@ -3661,8 +4023,9 @@ def evaluate_pair_by_coloring(
             "plucker_factors": w_components,
             "boundary_color_by_label": condition,
             "coloring_count": int(coloring["count"]),
-            "source_orientation_sign": orientation_sign,
-            "signed_coloring_count": orientation_sign * int(coloring["count"]),
+            "source_orientation_sign": 1,
+            "diagnostic_tag_orientation": tag_orientation,
+            "signed_coloring_count": int(coloring["count"]),
             "sample_edge_colors": coloring.get("sample_edge_colors", []),
             "sample_hourglass_colors": coloring.get("sample_hourglass_colors", []),
             "hourglass_swap_quotient": coloring.get("hourglass_swap_quotient", True),

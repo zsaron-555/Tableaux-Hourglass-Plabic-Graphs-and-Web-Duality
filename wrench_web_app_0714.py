@@ -1436,6 +1436,15 @@ def move_sequence_table(history: List[Dict[str, Any]]) -> str:
         multiplier = int(move.get("coefficient_multiplier", wrench.move_multiplier(smoothing)))
         untwist_count = int(move.get("untwist_count", 0) or 0)
         branch_label = smoothing + (f"; untwist x{untwist_count}" if untwist_count else "")
+        paper_multiplier = move.get("paper_coefficient_multiplier")
+        tag_multiplier = int(move.get("tag_transport_multiplier", 1))
+        if paper_multiplier is not None:
+            branch_label += (
+                f"; paper {int(paper_multiplier):+d}, tag transport {tag_multiplier:+d}, "
+                f"effective {multiplier:+d}"
+            )
+        elif move.get("phase") == "antisymmetrizer":
+            branch_label += f"; terminal tag transport {tag_multiplier:+d}"
         running_coeff *= multiplier
         phase = str(move.get("phase", "main_search"))
         phase_label = phase_display_label(phase)
@@ -1738,6 +1747,15 @@ def move_sequence_table_lazy(history: List[Dict[str, Any]], branch_id: str) -> s
         multiplier = int(move.get("coefficient_multiplier", wrench.move_multiplier(smoothing)))
         untwist_count = int(move.get("untwist_count", 0) or 0)
         branch_label = smoothing + (f"; untwist x{untwist_count}" if untwist_count else "")
+        paper_multiplier = move.get("paper_coefficient_multiplier")
+        tag_multiplier = int(move.get("tag_transport_multiplier", 1))
+        if paper_multiplier is not None:
+            branch_label += (
+                f"; paper {int(paper_multiplier):+d}, tag transport {tag_multiplier:+d}, "
+                f"effective {multiplier:+d}"
+            )
+        elif move.get("phase") == "antisymmetrizer":
+            branch_label += f"; terminal tag transport {tag_multiplier:+d}"
         running_coeff *= multiplier
         phase = str(move.get("phase", "main_search"))
         phase_label = phase_display_label(phase)
