@@ -712,6 +712,52 @@ def _edge_curve_record(edge: Tuple[int, int], points: List[Tuple[float, float]])
     }
 
 
+def _curve_crosses_curve(
+    first: List[Tuple[float, float]],
+    second: List[Tuple[float, float]],
+) -> bool:
+    """Test whether two cubics cross away from their common endpoint(s)."""
+    first_points = [_cubic_point(first, index / 40.0) for index in range(2, 39)]
+    second_points = [_cubic_point(second, index / 40.0) for index in range(2, 39)]
+    first_segments = list(zip(first_points, first_points[1:]))
+    second_segments = list(zip(second_points, second_points[1:]))
+    return any(
+        _proper_segment_crossing(a, b, c, d)
+        for a, b in first_segments
+        for c, d in second_segments
+    )
+
+
+def edge_curves_from_history(
+    history: Iterable[Dict[str, Any]],
+    side: str,
+    adj: Optional[Adjacency] = None,
+) -> Dict[Tuple[int, int], List[Tuple[float, float]]]:
+    """Return the accumulated tangent embedding carried by one branch side.
+
+    A later wrench move must test its replacement curves against the curves
+    produced by earlier moves, not against newly invented straight chords.
+    Records for deleted edges are filtered when ``adj`` is supplied.
+    """
+    wanted_side = str(side).upper()
+    curves: Dict[Tuple[int, int], List[Tuple[float, float]]] = {}
+    for move in history:
+        if str(move.get("side", "X")).upper() != wanted_side:
+            continue
+        for record in move.get("edge_curves", []):
+            edge = record.get("edge", [])
+            points = record.get("points", [])
+            if len(edge) != 2 or len(points) != 4:
+                continue
+            curves[_edge_pair(int(edge[0]), int(edge[1]))] = [
+                (float(point[0]), float(point[1])) for point in points
+            ]
+    if adj is not None:
+        live_edges = ordinary_edge_pairs(adj)
+        curves = {edge: points for edge, points in curves.items() if edge in live_edges}
+    return curves
+
+
 def _edge_pair(u: int, v: int) -> Tuple[int, int]:
     return tuple(sorted((int(u), int(v))))
 
@@ -1006,6 +1052,7 @@ def apply_figure43_move(
 
 
 ANTISYMMETRIZER_TERMS: List[Tuple[Tuple[int, int, int], int]] = [
+    # Use -sign(sigma), in the order id, (23), (12), (123), (132), (13).
     ((1, 2, 3), -1),
     ((1, 3, 2), 1),
     ((2, 1, 3), 1),
@@ -1013,6 +1060,15 @@ ANTISYMMETRIZER_TERMS: List[Tuple[Tuple[int, int, int], int]] = [
     ((3, 1, 2), -1),
     ((3, 2, 1), 1),
 ]
+
+ANTISYMMETRIZER_PERMUTATION_LABELS: Dict[Tuple[int, int, int], str] = {
+    (1, 2, 3): "id",
+    (1, 3, 2): "(23)",
+    (2, 1, 3): "(12)",
+    (2, 3, 1): "(123)",
+    (3, 1, 2): "(132)",
+    (3, 2, 1): "(13)",
+}
 
 
 def _ordered_ports_across_edge(
@@ -1107,8 +1163,12 @@ def detect_antisymmetrizer_moves(
                     "rhs_terms": [
                         {
                             "permutation": list(perm),
+                            "permutation_label": ANTISYMMETRIZER_PERMUTATION_LABELS[perm],
                             "coefficient_multiplier": coeff,
-                            "tag_transport_multiplier": -1,
+                            # Preserve the six incident half-edge slots. The
+                            # paper coefficient already contains permutation
+                            # parity, so it must not be applied again later.
+                            "tag_transport_multiplier": 1,
                             "smoothing": "perm_" + "".join(str(x) for x in perm),
                         }
                         for perm, coeff in ANTISYMMETRIZER_TERMS
@@ -1149,6 +1209,40 @@ def apply_antisymmetrizer_move(
     return new_adj
 
 
+def antisymmetrizer_edge_curves(
+    match: Dict[str, Any],
+    permutation: Iterable[int],
+    node_xy: Optional[NodeXY],
+) -> Dict[Tuple[int, int], List[Tuple[float, float]]]:
+    """Carry the six local half-edge slots through an antisymmetrizer move.
+
+    Each replacement strand is tangent to the deleted white arm at its input
+    and to the deleted black arm at its output. The curves retain the embedded
+    permutation drawn in the braid relation. Its parity is already the paper
+    coefficient and is not an additional terminal-coloring sign.
+    """
+    if not node_xy:
+        return {}
+    white = int(match["white"])
+    black = int(match["black"])
+    input_ports = [int(port) for port in match["input_ports"]]
+    output_ports = [int(port) for port in match["output_ports"]]
+    permutation = [int(item) for item in permutation]
+    curves: Dict[Tuple[int, int], List[Tuple[float, float]]] = {}
+    for input_index, output_index in enumerate(permutation):
+        input_port = input_ports[input_index]
+        output_port = output_ports[output_index - 1]
+        if all(node in node_xy for node in (input_port, white, output_port, black)):
+            curves[_edge_pair(input_port, output_port)] = _tangent_cubic(
+                input_port,
+                white,
+                output_port,
+                black,
+                node_xy,
+            )
+    return curves
+
+
 def smooth_one_hourglass_embedded(
     adj: Adjacency,
     hg: Hourglass,
@@ -1157,20 +1251,18 @@ def smooth_one_hourglass_embedded(
     node_xy: Optional[NodeXY] = None,
     boundary_labels: Optional[BoundaryLabels] = None,
     forced_untwists: Optional[List[Dict[str, Any]]] = None,
+    existing_edge_curves: Optional[Dict[Tuple[int, int], List[Tuple[float, float]]]] = None,
 ) -> Tuple[Adjacency, Dict[str, Any]]:
     """Smooth one wrench while transporting its tagged ribbon embedding.
 
-    Each replacement edge initially inherits the exact half-edge slot occupied
-    by the deleted wrench edge at both leaves.  There is one further ribbon
-    correction: if a leaf has an additional incident edge whose other endpoint
-    lies cyclically between the two opposite-colour leaves of the wrench, the
-    replacement and additional edge are untwisted.  This transposes two local
-    slots and contributes ``-1``.  These are precisely the A-E, B-E, C-F, and
-    D-F shared-leaf obstructions; arbitrary crossings between display curves do
-    not affect the coefficient.
+    Each replacement edge inherits the exact half-edge slot occupied by the
+    deleted wrench edge at both leaves.  Potential A-E, B-E, C-F, and D-F
+    untwists are recorded, but neither the cyclic order nor the skein
+    coefficient is changed here.  Their parity is applied only when a terminal
+    branch reaches the coloring stage.
 
-    ``forced_untwists`` replays the recorded combinatorial transpositions and
-    keeps saved branch pages independent of later drawing changes.
+    ``forced_untwists`` replays the recorded deferred corrections and keeps
+    saved branch pages independent of later drawing changes.
     """
     if smoothing not in {"crossing", "parallel"}:
         raise ValueError("smoothing must be 'crossing' or 'parallel'.")
@@ -1218,13 +1310,6 @@ def smooth_one_hourglass_embedded(
                     second_endpoint,
                     node_xy,
                 )
-    tangent_endpoint: Dict[Tuple[int, int], Dict[int, int]] = {}
-    for first_port, first_endpoint, second_port, second_endpoint in pairings:
-        tangent_endpoint[_edge_pair(first_port, second_port)] = {
-            int(first_port): int(first_endpoint),
-            int(second_port): int(second_endpoint),
-        }
-
     def boundary_support(start: int, cut: int) -> List[int]:
         if not boundary_labels:
             return []
@@ -1318,21 +1403,29 @@ def smooth_one_hourglass_embedded(
                         )
                     new_edge = _edge_pair(int(leaf), int(new_neighbor))
                     curve = curves.get(new_edge)
-                    shared_leaf_crossing = bool(
-                        curve
-                        and node_xy
-                        and _curve_crosses_incident_edge(
-                            curve,
-                            int(leaf),
-                            int(existing_neighbor),
-                            node_xy,
+                    existing_edge = _edge_pair(int(leaf), int(existing_neighbor))
+                    existing_curve = (existing_edge_curves or {}).get(existing_edge)
+                    if curve and existing_curve:
+                        shared_leaf_crossing = _curve_crosses_curve(curve, existing_curve)
+                    else:
+                        shared_leaf_crossing = bool(
+                            curve
+                            and node_xy
+                            and _curve_crosses_incident_edge(
+                                curve,
+                                int(leaf),
+                                int(existing_neighbor),
+                                node_xy,
+                            )
                         )
-                    )
-                    # With boundary data available the ribbon criterion is
-                    # combinatorial.  A crossing caused only by the current
-                    # drawing coordinates must not change a coefficient.
-                    geometric_issue = shared_leaf_crossing if not boundary_labels else False
-                    if not cyclic_issue and not geometric_issue:
+                    # The A-E/B-E/C-F/D-F cyclic condition identifies where a
+                    # sign obstruction may occur.  It contributes a sign only
+                    # when the two *carried* curves actually cross.  Earlier
+                    # versions retested old curved edges as straight chords,
+                    # creating false untwists late in a branch.
+                    if not shared_leaf_crossing:
+                        continue
+                    if boundary_labels and not cyclic_issue:
                         continue
                     key = (int(leaf), int(new_neighbor), int(existing_neighbor))
                     if key in seen_untwists:
@@ -1353,52 +1446,21 @@ def smooth_one_hourglass_embedded(
     else:
         untwists = copy.deepcopy(forced_untwists)
 
-    for untwist in untwists:
-        vertex = int(untwist["vertex"])
-        new_neighbor = int(untwist["new_neighbor"])
-        existing_neighbor = int(untwist["existing_neighbor"])
-        swap_cyclic_neighbors(new_adj, vertex, new_neighbor, existing_neighbor)
-
-        # Keep the branch picture consistent with the corrected ribbon order by
-        # exchanging the two local tangents.  This is display metadata only.
-        if node_xy:
-            new_edge = _edge_pair(vertex, new_neighbor)
-            old_tangent = tangent_endpoint.get(new_edge, {}).get(vertex)
-            if new_edge in curves and old_tangent in node_xy and existing_neighbor in node_xy:
-                points = curves[new_edge]
-                if points[0] == node_xy[vertex]:
-                    points[1] = _point_toward(node_xy[vertex], node_xy[existing_neighbor])
-                else:
-                    points[2] = _point_toward(node_xy[vertex], node_xy[existing_neighbor])
-                existing_edge = _edge_pair(vertex, existing_neighbor)
-                if vertex <= existing_neighbor:
-                    curves[existing_edge] = [
-                        node_xy[vertex],
-                        _point_toward(node_xy[vertex], node_xy[old_tangent]),
-                        _point_toward(node_xy[existing_neighbor], node_xy[vertex]),
-                        node_xy[existing_neighbor],
-                    ]
-                else:
-                    curves[existing_edge] = [
-                        node_xy[existing_neighbor],
-                        _point_toward(node_xy[existing_neighbor], node_xy[vertex]),
-                        _point_toward(node_xy[vertex], node_xy[old_tangent]),
-                        node_xy[vertex],
-                    ]
-
     del new_adj[left]
     del new_adj[right]
     new_adj = drop_nonreciprocal_references(new_adj)
     validate_adjacency(new_adj)
     relation_multiplier = move_multiplier(smoothing)
-    untwist_multiplier = -1 if len(untwists) % 2 else 1
+    deferred_untwist_multiplier = -1 if len(untwists) % 2 else 1
     metadata = {
         "relation_multiplier": relation_multiplier,
-        "untwist_count": len(untwists),
-        "untwist_multiplier": untwist_multiplier,
-        "coefficient_multiplier": relation_multiplier * untwist_multiplier,
-        "untwists": untwists,
-        "embedding_policy": "preserve_slots_then_shared_leaf_untwist",
+        "untwist_count": 0,
+        "untwist_multiplier": 1,
+        "deferred_untwist_count": len(untwists),
+        "deferred_untwist_multiplier": deferred_untwist_multiplier,
+        "coefficient_multiplier": relation_multiplier,
+        "deferred_untwists": untwists,
+        "embedding_policy": "preserve_slots_then_defer_shared_leaf_untwist",
         "replacement_edges": [[int(a), int(b)] for a, _, b, _ in pairings],
         "edge_curves": [_edge_curve_record(edge, points) for edge, points in sorted(curves.items())],
     }
@@ -1412,6 +1474,7 @@ def smooth_one_hourglass(
     *,
     node_xy: Optional[NodeXY] = None,
     forced_untwists: Optional[List[Dict[str, Any]]] = None,
+    existing_edge_curves: Optional[Dict[Tuple[int, int], List[Tuple[float, float]]]] = None,
 ) -> Adjacency:
     """Compatibility wrapper returning only the smoothed adjacency."""
     return smooth_one_hourglass_embedded(
@@ -1420,6 +1483,7 @@ def smooth_one_hourglass(
         smoothing,
         node_xy=node_xy,
         forced_untwists=forced_untwists,
+        existing_edge_curves=existing_edge_curves,
     )[0]
 
 
@@ -1967,12 +2031,18 @@ def expand_pair_term(
     children = []
     for smoothing in ("crossing", "parallel"):
         if side == "X":
+            carried_curves = edge_curves_from_history(
+                term.get("history", []),
+                "X",
+                term["x_adj"],
+            )
             child_x_adj, embedding = smooth_one_hourglass_embedded(
                 term["x_adj"],
                 hg,
                 smoothing,
                 node_xy=node_xy,
                 boundary_labels=boundary_labels,
+                existing_edge_curves=carried_curves,
             )
             child_x_remaining = remaining_after_move(term["x_remaining"], hg)
             child_w_adj = term["w_adj"]
@@ -1980,12 +2050,18 @@ def expand_pair_term(
         else:
             child_x_adj = term["x_adj"]
             child_x_remaining = term["x_remaining"]
+            carried_curves = edge_curves_from_history(
+                term.get("history", []),
+                "W",
+                term["w_adj"],
+            )
             child_w_adj, embedding = smooth_one_hourglass_embedded(
                 term["w_adj"],
                 hg,
                 smoothing,
                 node_xy=node_xy,
                 boundary_labels=boundary_labels,
+                existing_edge_curves=carried_curves,
             )
             child_w_remaining = remaining_after_move(term["w_remaining"], hg)
         move = {
@@ -2067,6 +2143,8 @@ def expand_pair_term_by_figure43(
 def expand_pair_term_by_antisymmetrizer(
     term: Dict[str, Any],
     match: Dict[str, Any],
+    *,
+    node_xy: Optional[NodeXY] = None,
 ) -> List[Dict[str, Any]]:
     children = []
     for rhs in match.get("rhs_terms", []):
@@ -2074,6 +2152,13 @@ def expand_pair_term_by_antisymmetrizer(
         multiplier = int(rhs["coefficient_multiplier"])
         child_x_adj = apply_antisymmetrizer_move(term["x_adj"], match, permutation)
         child_x_remaining = clean_hourglasses_for_adj(child_x_adj, term["x_remaining"])
+        curves = antisymmetrizer_edge_curves(match, permutation, node_xy)
+        inversion_count = sum(
+            1
+            for i in range(len(permutation))
+            for j in range(i + 1, len(permutation))
+            if permutation[i] > permutation[j]
+        )
         move = {
             "phase": "antisymmetrizer",
             "side": "X",
@@ -2084,9 +2169,22 @@ def expand_pair_term_by_antisymmetrizer(
             "input_ports": [int(port) for port in match["input_ports"]],
             "output_ports": [int(port) for port in match["output_ports"]],
             "permutation": permutation,
+            "permutation_label": str(
+                rhs.get(
+                    "permutation_label",
+                    ANTISYMMETRIZER_PERMUTATION_LABELS[tuple(permutation)],
+                )
+            ),
             "smoothing": str(rhs.get("smoothing", "perm_" + "".join(str(x) for x in permutation))),
             "coefficient_multiplier": multiplier,
-            "tag_transport_multiplier": int(rhs.get("tag_transport_multiplier", -1)),
+            "paper_coefficient_multiplier": multiplier,
+            "tag_transport_multiplier": 1,
+            "permutation_inversion_count": inversion_count,
+            "permutation_sign": permutation_sign(permutation),
+            "embedding_policy": "preserve_slots_and_embedded_permutation",
+            "edge_curves": [
+                _edge_curve_record(edge, points) for edge, points in sorted(curves.items())
+            ],
         }
         children.append(
             {
@@ -2280,14 +2378,6 @@ def evaluate_pair_state_by_coloring(
         if evaluation["status"] != "computed":
             evaluation["term_value"] = None
             return None
-        source_side = str(evaluation.get("source_side", "X"))
-        source_orientation_sign = relation_history_orientation_sign(
-            term.get("history", []), source_side
-        )
-        evaluation["source_orientation_sign"] = source_orientation_sign
-        evaluation["signed_coloring_count"] = (
-            int(evaluation["coloring_count"]) * source_orientation_sign
-        )
         signed_count = int(evaluation.get("signed_coloring_count", evaluation["coloring_count"]))
         evaluation["term_value"] = term["coeff"] * signed_count
         total += int(evaluation["term_value"])
@@ -2354,11 +2444,12 @@ def evaluate_pair_by_x_component_coloring(
             "status": "not_computed",
             "reason": "X does not have exactly four boundary-bearing connected components",
         }
-    # Proposition 2.20 gives an unsigned count after the terminal component
-    # graph has been put in canonical Plucker-factor orientation.  Our stored
-    # tagged component graph need not already have that orientation, so apply
-    # this conversion coefficient exactly once before using the unsigned count.
-    tag_orientation = plucker_product_orientation_sign(x_adj, x_boundary_labels, r=r)
+    orientation_sign = plucker_product_orientation_sign(x_adj, x_boundary_labels, r=r)
+    if orientation_sign is None:
+        return {
+            "status": "not_computed",
+            "reason": "X components do not carry four tagged Plucker-claw orientations",
+        }
     count = count_consistent_colorings(
         w_adj,
         w_boundary_labels,
@@ -2371,9 +2462,8 @@ def evaluate_pair_by_x_component_coloring(
         "source_side": "X_components",
         "boundary_color_by_label": condition,
         "coloring_count": count,
-        "source_orientation_sign": 1,
-        "diagnostic_tag_orientation": tag_orientation,
-        "signed_coloring_count": count,
+        "source_orientation_sign": orientation_sign,
+        "signed_coloring_count": orientation_sign * count,
     }
 
 
@@ -2383,19 +2473,24 @@ def relation_history_orientation_sign(
 ) -> int:
     """Return the canonical-tag conversion transported by applied relations.
 
-    Flattened terminal adjacency does not retain every tag motion.  Figure 43
-    and the white-black antisymmetrizer therefore record their transport signs
-    explicitly in branch history.  Only moves made on the terminal source side
-    contribute to its Plucker-product orientation.
+    Flattened terminal adjacency does not retain every ribbon untwist.  Local
+    skein replacements preserve their half-edge slots during expansion and
+    record any required untwist parity in branch history.  That parity is
+    applied here, at terminal coloring.  Only moves made on the terminal source
+    side contribute to its Plucker-product orientation.
     """
     side = str(source_side).upper()
     sign = 1
     for move in history:
         if str(move.get("side", "X")).upper() != side:
             continue
-        if move.get("phase") not in {"figure43", "antisymmetrizer"}:
-            continue
-        sign *= int(move.get("tag_transport_multiplier", 1))
+        phase = move.get("phase")
+        if "deferred_untwist_multiplier" in move:
+            sign *= int(move.get("deferred_untwist_multiplier", 1))
+        elif phase in {"figure43", "antisymmetrizer"}:
+            # Backward-compatible replay for histories created before deferred
+            # ribbon untwists were recorded explicitly.
+            sign *= int(move.get("tag_transport_multiplier", 1))
     return sign
 
 
@@ -2430,13 +2525,6 @@ def evaluate_pair_state_by_x_component_coloring(
         if evaluation["status"] != "computed":
             evaluation["term_value"] = None
             return None
-        source_orientation_sign = relation_history_orientation_sign(
-            term.get("history", []), "X"
-        )
-        evaluation["source_orientation_sign"] = source_orientation_sign
-        evaluation["signed_coloring_count"] = (
-            int(evaluation["coloring_count"]) * source_orientation_sign
-        )
         signed_count = int(evaluation.get("signed_coloring_count", evaluation["coloring_count"]))
         evaluation["term_value"] = term["coeff"] * signed_count
         total += int(evaluation["term_value"])
@@ -2942,7 +3030,11 @@ def choose_x_resolution_successors(
             if plucker_product_components(term["x_adj"], x_boundary_labels, r=4) is None:
                 for match in detect_antisymmetrizer_moves(term["x_adj"], x_node_colors, x_node_xy):
                     try:
-                        children = expand_pair_term_by_antisymmetrizer(term, match)
+                        children = expand_pair_term_by_antisymmetrizer(
+                            term,
+                            match,
+                            node_xy=x_node_xy,
+                        )
                     except ValueError:
                         continue
                     next_terms = active[:term_idx] + active[term_idx + 1 :] + children

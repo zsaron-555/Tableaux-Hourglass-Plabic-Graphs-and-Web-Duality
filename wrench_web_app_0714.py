@@ -859,6 +859,7 @@ def draw_web_svg(
     edge_colors: Optional[Dict[Tuple[int, int], str]] = None,
     hourglass_colors: Optional[Dict[Tuple[int, int], Tuple[str, str]]] = None,
     node_ring_colors: Optional[Dict[int, str]] = None,
+    highlight_edges: Optional[Dict[Tuple[int, int], str]] = None,
     edge_curves: Optional[Dict[Tuple[int, int], List[Tuple[float, float]]]] = None,
     subtitle: str = "",
     size: int = 330,
@@ -867,6 +868,7 @@ def draw_web_svg(
     edge_colors = edge_colors or {}
     hourglass_colors = hourglass_colors or {}
     node_ring_colors = node_ring_colors or {}
+    highlight_edges = highlight_edges or {}
     edge_curves = edge_curves or {}
     selected_key = tuple(sorted(selected_hg)) if selected_hg else None
     selected_wrench_edges: set[Tuple[int, int]] = set()
@@ -910,6 +912,9 @@ def draw_web_svg(
         edge_key = tuple(sorted((u, v)))
         if edge_key in selected_wrench_edges:
             color = "#cf2f2f"
+            width = 5
+        elif edge_key in highlight_edges:
+            color = highlight_edges[edge_key]
             width = 5
         else:
             color = edge_colors.get(edge_key, "#111")
@@ -1183,6 +1188,7 @@ def reconstruct_run(x_path: Path, w_path: Path, proof: Dict[str, Any]):
             )
             steps.append(
                 {
+                    "move": dict(continue_move),
                     "side": side,
                     "selected": tuple(int(v) for v in continue_move.get("vertices", [])),
                     "current_x": before_x,
@@ -1205,6 +1211,8 @@ def reconstruct_run(x_path: Path, w_path: Path, proof: Dict[str, Any]):
                     "continue_wh": current_wh,
                     "continue_new_x": edge_set(current_x) - edge_set(before_x),
                     "continue_new_w": edge_set(current_w) - edge_set(before_w),
+                    "deferred_untwist_count": int(continue_move.get("deferred_untwist_count", 0) or 0),
+                    "deferred_untwist_multiplier": int(continue_move.get("deferred_untwist_multiplier", 1) or 1),
                 }
             )
             continue
@@ -1274,6 +1282,7 @@ def reconstruct_run(x_path: Path, w_path: Path, proof: Dict[str, Any]):
         cont_x, cont_w, cont_xh, cont_wh, cont_new_x, cont_new_w, cont_curves = branch(continue_move["smoothing"])
         steps.append(
             {
+                "move": dict(continue_move),
                 "side": side,
                 "selected": selected,
                 "current_x": current_x,
@@ -1300,6 +1309,8 @@ def reconstruct_run(x_path: Path, w_path: Path, proof: Dict[str, Any]):
                 "continue_curves": cont_curves,
                 "untwist_count": int(continue_move.get("untwist_count", 0) or 0),
                 "untwist_multiplier": int(continue_move.get("untwist_multiplier", 1) or 1),
+                "deferred_untwist_count": int(continue_move.get("deferred_untwist_count", 0) or 0),
+                "deferred_untwist_multiplier": int(continue_move.get("deferred_untwist_multiplier", 1) or 1),
             }
         )
         current_x, current_w, current_xh, current_wh = cont_x, cont_w, cont_xh, cont_wh
@@ -1426,6 +1437,32 @@ def move_piece_label(move: Dict[str, Any]) -> str:
     return "hourglass"
 
 
+def relation_before_highlights(
+    move: Dict[str, Any],
+    side: str,
+) -> Tuple[Dict[Tuple[int, int], str], Dict[int, str]]:
+    """Highlight the complete local structure removed by a relation.
+
+    For the white-black antisymmetrizer this is the central edge together with
+    the three incident arms at each endpoint.  Keeping this construction in one
+    helper ensures the main trace, branch pages, and lazy move pages all mark
+    the same seven-edge local piece.
+    """
+    if move.get("phase") != "antisymmetrizer" or str(move.get("side", "X")) != side:
+        return {}, {}
+
+    white = int(move["white"])
+    black = int(move["black"])
+    input_ports = [int(port) for port in move.get("input_ports", [])]
+    output_ports = [int(port) for port in move.get("output_ports", [])]
+    color = "#cf2f2f"
+    edges = {tuple(sorted((white, black))): color}
+    edges.update({tuple(sorted((white, port))): color for port in input_ports})
+    edges.update({tuple(sorted((black, port))): color for port in output_ports})
+    nodes = {node: color for node in {white, black, *input_ports, *output_ports}}
+    return edges, nodes
+
+
 def move_sequence_table(history: List[Dict[str, Any]]) -> str:
     if not history:
         return '<p class="muted">No skein moves were applied on this branch.</p>'
@@ -1436,6 +1473,14 @@ def move_sequence_table(history: List[Dict[str, Any]]) -> str:
         multiplier = int(move.get("coefficient_multiplier", wrench.move_multiplier(smoothing)))
         untwist_count = int(move.get("untwist_count", 0) or 0)
         branch_label = smoothing + (f"; untwist x{untwist_count}" if untwist_count else "")
+        if move.get("phase") == "antisymmetrizer" and move.get("permutation_label"):
+            branch_label += f" = {move['permutation_label']}"
+        deferred_count = int(move.get("deferred_untwist_count", 0) or 0)
+        if deferred_count:
+            branch_label += (
+                f"; defer untwist x{deferred_count} to coloring "
+                f"({int(move.get('deferred_untwist_multiplier', 1)):+d})"
+            )
         paper_multiplier = move.get("paper_coefficient_multiplier")
         tag_multiplier = int(move.get("tag_transport_multiplier", 1))
         if paper_multiplier is not None:
@@ -1443,7 +1488,7 @@ def move_sequence_table(history: List[Dict[str, Any]]) -> str:
                 f"; paper {int(paper_multiplier):+d}, tag transport {tag_multiplier:+d}, "
                 f"effective {multiplier:+d}"
             )
-        elif move.get("phase") == "antisymmetrizer":
+        elif move.get("phase") == "antisymmetrizer" and not deferred_count:
             branch_label += f"; terminal tag transport {tag_multiplier:+d}"
         running_coeff *= multiplier
         phase = str(move.get("phase", "main_search"))
@@ -1528,10 +1573,12 @@ def branch_terminal_picture(
         )
     except Exception as exc:  # noqa: BLE001 - this is a display diagnostic.
         return f'<p class="muted">Could not replay this branch picture: {html.escape(str(exc))}</p>'
+    x_curves = wrench.edge_curves_from_history(history, "X", branch_x)
+    w_curves = wrench.edge_curves_from_history(history, "W", branch_w)
     return f"""
     <div class="mini-pair branch-terminal-pair">
-      {draw_web_svg('W terminal state', w_graph, branch_w, branch_wh, highlight_fork=fork, size=270)}
-      {draw_web_svg('X terminal state', x_graph, branch_x, branch_xh, highlight_fork=fork, size=270)}
+      {draw_web_svg('W terminal state', w_graph, branch_w, branch_wh, highlight_fork=fork, edge_curves=w_curves, size=270)}
+      {draw_web_svg('X terminal state', x_graph, branch_x, branch_xh, highlight_fork=fork, edge_curves=x_curves, size=270)}
     </div>
     """
 
@@ -1574,26 +1621,39 @@ def branch_move_picture(
     local_piece = move.get("vertices", list(selected))
     side = str(move.get("side", ""))
     smoothing = str(move.get("smoothing", ""))
+    if move.get("phase") == "antisymmetrizer" and move.get("permutation_label"):
+        smoothing += f" = {move['permutation_label']}"
     phase = str(move.get("phase", "main_search"))
     phase_label = phase_display_label(phase)
-    curves = move_edge_curves(move)
+    before_x_curves = wrench.edge_curves_from_history(prefix_before, "X", before_x)
+    before_w_curves = wrench.edge_curves_from_history(prefix_before, "W", before_w)
+    after_x_curves = wrench.edge_curves_from_history(prefix_after, "X", after_x)
+    after_w_curves = wrench.edge_curves_from_history(prefix_after, "W", after_w)
     untwist_count = int(move.get("untwist_count", 0) or 0)
     untwist_note = (
         f"; {untwist_count} shared-leaf untwist(s), sign {int(move.get('untwist_multiplier', 1)):+d}"
         if untwist_count
         else ""
     )
+    deferred_count = int(move.get("deferred_untwist_count", 0) or 0)
+    if deferred_count:
+        untwist_note += (
+            f"; preserve cyclic order now, defer {deferred_count} untwist(s) "
+            f"to coloring with sign {int(move.get('deferred_untwist_multiplier', 1)):+d}"
+        )
     new_x = edge_set(after_x) - edge_set(before_x)
     new_w = edge_set(after_w) - edge_set(before_w)
+    before_w_highlight_edges, before_w_highlight_nodes = relation_before_highlights(move, "W")
+    before_x_highlight_edges, before_x_highlight_nodes = relation_before_highlights(move, "X")
     return f"""
     <div class="branch-move-picture">
       <h4>Move {move_index}: {html.escape(phase_label)} applies {html.escape(side)} {move_piece_label(move)} {html.escape(str(local_piece))} as {html.escape(smoothing + untwist_note)}</h4>
       {render_pre_untwist_stage(move, x_graph, w_graph, before_x, before_xh, before_w, before_wh)}
       <div class="grid four">
-        {draw_web_svg('Before W', w_graph, before_w, before_wh, selected_hg=None if move.get("phase") in {"figure43", "antisymmetrizer"} else (selected if side == 'W' else None), size=250)}
-        {draw_web_svg('Before X', x_graph, before_x, before_xh, selected_hg=None if move.get("phase") in {"figure43", "antisymmetrizer"} else (selected if side == 'X' else None), size=250)}
-        {draw_web_svg('After W', w_graph, after_w, after_wh, edge_colors={e: '#2586d8' for e in new_w}, edge_curves=curves if side == 'W' else None, size=250)}
-        {draw_web_svg('After X', x_graph, after_x, after_xh, edge_colors={e: '#2586d8' for e in new_x}, edge_curves=curves if side == 'X' else None, size=250)}
+        {draw_web_svg('Before W', w_graph, before_w, before_wh, selected_hg=None if move.get("phase") in {"figure43", "antisymmetrizer"} else (selected if side == 'W' else None), highlight_edges=before_w_highlight_edges, node_ring_colors=before_w_highlight_nodes, edge_curves=before_w_curves, size=250)}
+        {draw_web_svg('Before X', x_graph, before_x, before_xh, selected_hg=None if move.get("phase") in {"figure43", "antisymmetrizer"} else (selected if side == 'X' else None), highlight_edges=before_x_highlight_edges, node_ring_colors=before_x_highlight_nodes, edge_curves=before_x_curves, size=250)}
+        {draw_web_svg('After W', w_graph, after_w, after_wh, edge_colors={e: '#2586d8' for e in new_w}, edge_curves=after_w_curves, size=250)}
+        {draw_web_svg('After X', x_graph, after_x, after_xh, edge_colors={e: '#2586d8' for e in new_x}, edge_curves=after_x_curves, size=250)}
       </div>
     </div>
     """
@@ -1704,25 +1764,36 @@ def branch_process_pictures(
         smoothing = str(move.get("smoothing", ""))
         phase = str(move.get("phase", "main_search"))
         phase_label = phase_display_label(phase)
-        curves = move_edge_curves(move)
+        before_x_curves = wrench.edge_curves_from_history(prefix_before, "X", before_x)
+        before_w_curves = wrench.edge_curves_from_history(prefix_before, "W", before_w)
+        after_x_curves = wrench.edge_curves_from_history(prefix_after, "X", after_x)
+        after_w_curves = wrench.edge_curves_from_history(prefix_after, "W", after_w)
         untwist_count = int(move.get("untwist_count", 0) or 0)
         untwist_note = (
             f"; {untwist_count} shared-leaf untwist(s), sign {int(move.get('untwist_multiplier', 1)):+d}"
             if untwist_count
             else ""
         )
+        deferred_count = int(move.get("deferred_untwist_count", 0) or 0)
+        if deferred_count:
+            untwist_note += (
+                f"; preserve cyclic order now, defer {deferred_count} untwist(s) "
+                f"to coloring with sign {int(move.get('deferred_untwist_multiplier', 1)):+d}"
+            )
         new_x = edge_set(after_x) - edge_set(before_x)
         new_w = edge_set(after_w) - edge_set(before_w)
+        before_w_highlight_edges, before_w_highlight_nodes = relation_before_highlights(move, "W")
+        before_x_highlight_edges, before_x_highlight_nodes = relation_before_highlights(move, "X")
         blocks.append(
             f"""
             <div class="branch-move-picture">
               <h4>Move {idx}: {html.escape(phase_label)} applies {html.escape(side)} {move_piece_label(move)} {html.escape(str(local_piece))} as {html.escape(smoothing + untwist_note)}</h4>
               {render_pre_untwist_stage(move, x_graph, w_graph, before_x, before_xh, before_w, before_wh)}
               <div class="grid four">
-                {draw_web_svg('Before W', w_graph, before_w, before_wh, selected_hg=None if move.get("phase") in {"figure43", "antisymmetrizer"} else (selected if side == 'W' else None), size=250)}
-                {draw_web_svg('Before X', x_graph, before_x, before_xh, selected_hg=None if move.get("phase") in {"figure43", "antisymmetrizer"} else (selected if side == 'X' else None), size=250)}
-                {draw_web_svg('After W', w_graph, after_w, after_wh, edge_colors={e: '#2586d8' for e in new_w}, edge_curves=curves if side == 'W' else None, size=250)}
-                {draw_web_svg('After X', x_graph, after_x, after_xh, edge_colors={e: '#2586d8' for e in new_x}, edge_curves=curves if side == 'X' else None, size=250)}
+                {draw_web_svg('Before W', w_graph, before_w, before_wh, selected_hg=None if move.get("phase") in {"figure43", "antisymmetrizer"} else (selected if side == 'W' else None), highlight_edges=before_w_highlight_edges, node_ring_colors=before_w_highlight_nodes, edge_curves=before_w_curves, size=250)}
+                {draw_web_svg('Before X', x_graph, before_x, before_xh, selected_hg=None if move.get("phase") in {"figure43", "antisymmetrizer"} else (selected if side == 'X' else None), highlight_edges=before_x_highlight_edges, node_ring_colors=before_x_highlight_nodes, edge_curves=before_x_curves, size=250)}
+                {draw_web_svg('After W', w_graph, after_w, after_wh, edge_colors={e: '#2586d8' for e in new_w}, edge_curves=after_w_curves, size=250)}
+                {draw_web_svg('After X', x_graph, after_x, after_xh, edge_colors={e: '#2586d8' for e in new_x}, edge_curves=after_x_curves, size=250)}
               </div>
             </div>
             """
@@ -1747,6 +1818,14 @@ def move_sequence_table_lazy(history: List[Dict[str, Any]], branch_id: str) -> s
         multiplier = int(move.get("coefficient_multiplier", wrench.move_multiplier(smoothing)))
         untwist_count = int(move.get("untwist_count", 0) or 0)
         branch_label = smoothing + (f"; untwist x{untwist_count}" if untwist_count else "")
+        if move.get("phase") == "antisymmetrizer" and move.get("permutation_label"):
+            branch_label += f" = {move['permutation_label']}"
+        deferred_count = int(move.get("deferred_untwist_count", 0) or 0)
+        if deferred_count:
+            branch_label += (
+                f"; defer untwist x{deferred_count} to coloring "
+                f"({int(move.get('deferred_untwist_multiplier', 1)):+d})"
+            )
         paper_multiplier = move.get("paper_coefficient_multiplier")
         tag_multiplier = int(move.get("tag_transport_multiplier", 1))
         if paper_multiplier is not None:
@@ -1754,7 +1833,7 @@ def move_sequence_table_lazy(history: List[Dict[str, Any]], branch_id: str) -> s
                 f"; paper {int(paper_multiplier):+d}, tag transport {tag_multiplier:+d}, "
                 f"effective {multiplier:+d}"
             )
-        elif move.get("phase") == "antisymmetrizer":
+        elif move.get("phase") == "antisymmetrizer" and not deferred_count:
             branch_label += f"; terminal tag transport {tag_multiplier:+d}"
         running_coeff *= multiplier
         phase = str(move.get("phase", "main_search"))
@@ -2270,10 +2349,26 @@ def run_pair(params: Dict[str, str]) -> str:
                 continue_title = "Displayed continuing branch"
                 continue_note = "this is the branch followed in the trace"
             selected = step["selected"]
+            step_move = step.get("move", {})
+            current_w_highlight_edges, current_w_highlight_nodes = relation_before_highlights(step_move, "W")
+            current_x_highlight_edges, current_x_highlight_nodes = relation_before_highlights(step_move, "X")
+            if step_move.get("phase") == "antisymmetrizer":
+                step_action = (
+                    f"apply {step['side']} white-black antisymmetrizer "
+                    f"to vertices {list(selected)}"
+                )
+            else:
+                step_action = f"expand {step['side']} hourglass {list(selected)}"
             if step.get("untwist_count"):
                 continue_note += (
                     f"; {step['untwist_count']} shared-leaf untwist(s) contribute "
                     f"{step.get('untwist_multiplier', 1):+d}"
+                )
+            if step.get("deferred_untwist_count"):
+                continue_note += (
+                    f"; cyclic order is preserved here and {step['deferred_untwist_count']} "
+                    f"untwist(s) are deferred to coloring, contributing "
+                    f"{step.get('deferred_untwist_multiplier', 1):+d} there"
                 )
             display_killed_w = step['killed_w']
             display_killed_x = step['killed_x']
@@ -2303,12 +2398,12 @@ def run_pair(params: Dict[str, str]) -> str:
                 f"""
                 <section class="step">
                   <div class="step-head">
-                    <div><strong>Step {idx}</strong>: expand {step['side']} hourglass {list(selected)}</div>
+                    <div><strong>Step {idx}</strong>: {html.escape(step_action)}</div>
                     <div class="muted">{html.escape(step['continue_smoothing'])} branch continues; {killed_branch_text}</div>
                   </div>
                   <div class="grid four">
-                    {draw_web_svg('Current W', w_graph, step['current_w'], step['current_wh'], selected_hg=selected if step['side']=='W' else None)}
-                    {draw_web_svg('Current X', x_graph, step['current_x'], step['current_xh'], selected_hg=selected if step['side']=='X' else None)}
+                    {draw_web_svg('Current W', w_graph, step['current_w'], step['current_wh'], selected_hg=selected if step['side']=='W' and step_move.get('phase') != 'antisymmetrizer' else None, highlight_edges=current_w_highlight_edges, node_ring_colors=current_w_highlight_nodes)}
+                    {draw_web_svg('Current X', x_graph, step['current_x'], step['current_xh'], selected_hg=selected if step['side']=='X' and step_move.get('phase') != 'antisymmetrizer' else None, highlight_edges=current_x_highlight_edges, node_ring_colors=current_x_highlight_nodes)}
                     <div class="pair-card">
                       <div class="pair-title">{killed_title}</div>
                       <div class="pair-note">{killed_note}</div>
@@ -2627,6 +2722,9 @@ def render_coloring_section(
         x_edge_colors = edge_colors if colored_side == "X" else {}
         w_hg_colors = hg_colors if colored_side == "W" else {}
         x_hg_colors = hg_colors if colored_side == "X" else {}
+        history = list(ev.get("history", []))
+        x_curves = wrench.edge_curves_from_history(history, "X", x_adj)
+        w_curves = wrench.edge_curves_from_history(history, "W", w_adj)
         cards.append(
             f"""
             <div class="factor-box">
@@ -2637,8 +2735,8 @@ def render_coloring_section(
               <p><strong>Contribution:</strong> {html.escape(str(ev.get('term_value')))}</p>
               <p class="muted">Hourglass strands use unordered distinct color pairs; swapping the two hourglass strand colors is not counted again.</p>
               <div class="grid two">
-                {draw_web_svg('W: compatible edge coloring', w_graph, w_adj, w_hgs, edge_colors=w_edge_colors, hourglass_colors=w_hg_colors, node_ring_colors=w_rings, subtitle='edge-colored from X boundary components')}
-                {draw_web_svg('X: boundary component colors', x_graph, x_adj, x_hgs, edge_colors=x_edge_colors, hourglass_colors=x_hg_colors, node_ring_colors=x_rings, subtitle='only boundary vertices are colored')}
+                {draw_web_svg('W: compatible edge coloring', w_graph, w_adj, w_hgs, edge_colors=w_edge_colors, hourglass_colors=w_hg_colors, node_ring_colors=w_rings, edge_curves=w_curves, subtitle='edge-colored from X boundary components')}
+                {draw_web_svg('X: boundary component colors', x_graph, x_adj, x_hgs, edge_colors=x_edge_colors, hourglass_colors=x_hg_colors, node_ring_colors=x_rings, edge_curves=x_curves, subtitle='only boundary vertices are colored')}
               </div>
             </div>
             """
