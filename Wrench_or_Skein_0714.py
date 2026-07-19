@@ -1152,6 +1152,16 @@ def detect_antisymmetrizer_moves(
             output_ports = _ordered_ports_across_edge(adj, black, white, output_ports, node_xy)
             if not _all_antisym_pairings_are_bipartite(input_ports, output_ports, node_colors):
                 continue
+            white_black_slot = white_neighbors.index(black)
+            black_white_slot = black_neighbors.index(white)
+            # The displayed antisymmetrizer reads the three ports on opposite
+            # sides in opposite boundary orientations.  Rotating the two
+            # tagged 4-valent tensors to that convention contributes one sign
+            # for every crossed tag slot, plus one sign for reversing the
+            # three-port order at the second endpoint.
+            tag_transport_multiplier = (
+                -1 if (white_black_slot + black_white_slot + 1) % 2 else 1
+            )
             matches.append(
                 {
                     "rule": "WB_4VALENT_ANTISYMMETRIZER",
@@ -1160,15 +1170,18 @@ def detect_antisymmetrizer_moves(
                     "vertices": [white, black],
                     "input_ports": input_ports,
                     "output_ports": output_ports,
+                    "white_black_edge_slot": white_black_slot,
+                    "black_white_edge_slot": black_white_slot,
+                    "tag_transport_multiplier": tag_transport_multiplier,
                     "rhs_terms": [
                         {
                             "permutation": list(perm),
                             "permutation_label": ANTISYMMETRIZER_PERMUTATION_LABELS[perm],
                             "coefficient_multiplier": coeff,
-                            # Preserve the six incident half-edge slots. The
-                            # paper coefficient already contains permutation
-                            # parity, so it must not be applied again later.
-                            "tag_transport_multiplier": 1,
+                            # The paper coefficient remains -sign(sigma).
+                            # This separate factor converts the web's tagged
+                            # endpoint orders to the displayed relation.
+                            "tag_transport_multiplier": tag_transport_multiplier,
                             "smoothing": "perm_" + "".join(str(x) for x in perm),
                         }
                         for perm, coeff in ANTISYMMETRIZER_TERMS
@@ -2149,7 +2162,9 @@ def expand_pair_term_by_antisymmetrizer(
     children = []
     for rhs in match.get("rhs_terms", []):
         permutation = [int(item) for item in rhs["permutation"]]
-        multiplier = int(rhs["coefficient_multiplier"])
+        paper_multiplier = int(rhs["coefficient_multiplier"])
+        tag_transport_multiplier = int(rhs.get("tag_transport_multiplier", 1))
+        multiplier = paper_multiplier * tag_transport_multiplier
         child_x_adj = apply_antisymmetrizer_move(term["x_adj"], match, permutation)
         child_x_remaining = clean_hourglasses_for_adj(child_x_adj, term["x_remaining"])
         curves = antisymmetrizer_edge_curves(match, permutation, node_xy)
@@ -2177,8 +2192,11 @@ def expand_pair_term_by_antisymmetrizer(
             ),
             "smoothing": str(rhs.get("smoothing", "perm_" + "".join(str(x) for x in permutation))),
             "coefficient_multiplier": multiplier,
-            "paper_coefficient_multiplier": multiplier,
-            "tag_transport_multiplier": 1,
+            "paper_coefficient_multiplier": paper_multiplier,
+            "tag_transport_multiplier": tag_transport_multiplier,
+            "tag_transport_applied_to_coefficient": True,
+            "white_black_edge_slot": int(match.get("white_black_edge_slot", 0)),
+            "black_white_edge_slot": int(match.get("black_white_edge_slot", 0)),
             "permutation_inversion_count": inversion_count,
             "permutation_sign": permutation_sign(permutation),
             "embedding_policy": "preserve_slots_and_embedded_permutation",
@@ -2444,8 +2462,8 @@ def evaluate_pair_by_x_component_coloring(
             "status": "not_computed",
             "reason": "X does not have exactly four boundary-bearing connected components",
         }
-    orientation_sign = plucker_product_orientation_sign(x_adj, x_boundary_labels, r=r)
-    if orientation_sign is None:
+    terminal_orientation = plucker_product_orientation_sign(x_adj, x_boundary_labels, r=r)
+    if terminal_orientation is None:
         return {
             "status": "not_computed",
             "reason": "X components do not carry four tagged Plucker-claw orientations",
@@ -2462,8 +2480,13 @@ def evaluate_pair_by_x_component_coloring(
         "source_side": "X_components",
         "boundary_color_by_label": condition,
         "coloring_count": count,
-        "source_orientation_sign": orientation_sign,
-        "signed_coloring_count": orientation_sign * count,
+        # Proposition 2.20 supplies the unsigned consistent-labeling count.
+        # The terminal embedding sign converts the carried cyclic orders to
+        # canonical Plucker-claw orientations.  The caller separately applies
+        # the one global sign of the original source web.
+        "source_orientation_sign": terminal_orientation,
+        "diagnostic_tag_orientation": terminal_orientation,
+        "signed_coloring_count": terminal_orientation * count,
     }
 
 
@@ -2485,12 +2508,15 @@ def relation_history_orientation_sign(
         if str(move.get("side", "X")).upper() != side:
             continue
         phase = move.get("phase")
-        if "deferred_untwist_multiplier" in move:
-            sign *= int(move.get("deferred_untwist_multiplier", 1))
+        deferred = move.get("deferred_untwist_multiplier")
+        if deferred is not None:
+            sign *= int(deferred)
         elif phase in {"figure43", "antisymmetrizer"}:
             # Backward-compatible replay for histories created before deferred
             # ribbon untwists were recorded explicitly.
-            sign *= int(move.get("tag_transport_multiplier", 1))
+            if not move.get("tag_transport_applied_to_coefficient", False):
+                transported = move.get("tag_transport_multiplier")
+                sign *= int(transported) if transported is not None else 1
     return sign
 
 
@@ -2500,7 +2526,10 @@ def evaluate_pair_state_by_x_component_coloring(
     w_boundary_labels: BoundaryLabels,
     *,
     r: int = 4,
+    source_web_sign: int = 1,
 ) -> Optional[Tuple[int, List[Dict[str, Any]]]]:
+    if source_web_sign not in {-1, 1}:
+        raise ValueError("source_web_sign must be +1 or -1")
     total = 0
     evaluations: List[Dict[str, Any]] = []
     for term in state["active"]:
@@ -2525,7 +2554,12 @@ def evaluate_pair_state_by_x_component_coloring(
         if evaluation["status"] != "computed":
             evaluation["term_value"] = None
             return None
-        signed_count = int(evaluation.get("signed_coloring_count", evaluation["coloring_count"]))
+        unsigned_count = int(evaluation["coloring_count"])
+        terminal_orientation = int(evaluation.get("source_orientation_sign", 1))
+        signed_count = source_web_sign * terminal_orientation * unsigned_count
+        evaluation["source_web_sign"] = source_web_sign
+        evaluation["terminal_orientation_sign"] = terminal_orientation
+        evaluation["signed_coloring_count"] = signed_count
         evaluation["term_value"] = term["coeff"] * signed_count
         total += int(evaluation["term_value"])
         evaluations.append(evaluation)
@@ -2932,6 +2966,7 @@ def prove_pair_value_complete_pipeline(
     x_node_xy: Optional[NodeXY] = None,
     w_node_colors: Optional[NodeColors] = None,
     w_node_xy: Optional[NodeXY] = None,
+    source_web_sign: int = 1,
 ) -> Dict[str, Any]:
     """Run the website pairing pipeline without changing W.
 
@@ -2956,6 +2991,7 @@ def prove_pair_value_complete_pipeline(
         x_node_xy=x_node_xy,
         w_node_colors=w_node_colors,
         w_node_xy=w_node_xy,
+        source_web_sign=source_web_sign,
     )
     proof = copy.deepcopy(proof)
     proof["allow_w_wrench"] = False
@@ -3386,6 +3422,7 @@ def prove_pair_value_by_x_component_coloring(
     x_node_xy: Optional[NodeXY] = None,
     w_node_colors: Optional[NodeColors] = None,
     w_node_xy: Optional[NodeXY] = None,
+    source_web_sign: int = 1,
 ) -> Dict[str, Any]:
     """Guided wrench/fork simplification, then X-component coloring.
 
@@ -3505,6 +3542,7 @@ def prove_pair_value_by_x_component_coloring(
                     x_boundary_labels,
                     w_boundary_labels,
                     r=4,
+                    source_web_sign=source_web_sign,
                 )
                 if evaluated is not None:
                     value, evaluations = evaluated
@@ -3817,6 +3855,17 @@ def permutation_sign(values: List[int]) -> int:
         for j in range(i + 1, len(values))
     )
     return -1 if inversions % 2 else 1
+
+
+def word_inversion_sign(word: str) -> int:
+    """Return BCGMMW's sign of a standard web's canonical word.
+
+    Definition 2.4 defines ``sign(W)`` as the inversion parity of the
+    lexicographically minimal boundary word.  The graph-data word is precisely
+    that Yamanouchi word for the basis webs used by this project.
+    """
+    letters = [int(letter) for letter in str(word).strip()]
+    return permutation_sign(letters)
 
 
 def plucker_product_orientation_sign(
