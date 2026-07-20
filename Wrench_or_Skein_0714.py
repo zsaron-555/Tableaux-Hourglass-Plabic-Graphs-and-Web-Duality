@@ -789,9 +789,10 @@ def detect_figure43_moves(
 
     At present this applies the bottom row of the screenshot/Figure 43:
     ordinary top and bottom sides, hourglass left and right sides, alternating
-    black-white-black-white vertices.  At q=1 the local relation is
+    black-white-black-white vertices.  At q=1 the local relation used by this
+    computation is
 
-        horizontal term - 2 * vertical term.
+        horizontal term + 2 * vertical term.
 
     The other Figure 43 rows are deliberately not guessed here; they should be
     added as separate RHS constructors once their port-level rewrites are
@@ -872,8 +873,8 @@ def detect_figure43_moves(
             },
             {
                 "smoothing": "vertical",
-                "coefficient_multiplier": -2,
-                "tag_transport_multiplier": -1,
+                "coefficient_multiplier": 2,
+                "tag_transport_multiplier": 1,
             },
         ]
         if not all(

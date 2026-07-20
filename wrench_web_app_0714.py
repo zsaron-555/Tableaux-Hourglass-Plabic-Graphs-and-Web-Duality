@@ -1963,6 +1963,24 @@ def terminal_branch_records(proof: Dict[str, Any]) -> List[Dict[str, Any]]:
     return records
 
 
+def proof_used_three_strand_relation(proof: Dict[str, Any]) -> bool:
+    """Return whether this particular proof used the three-strand relation."""
+    def contains_relation(value: Any) -> bool:
+        if isinstance(value, dict):
+            if value.get("phase") == "antisymmetrizer":
+                return True
+            if value.get("expanded_relation") == "antisymmetrizer":
+                return True
+            if value.get("rule") == "WB_4VALENT_ANTISYMMETRIZER":
+                return True
+            return any(contains_relation(item) for item in value.values())
+        if isinstance(value, (list, tuple)):
+            return any(contains_relation(item) for item in value)
+        return False
+
+    return contains_relation(proof)
+
+
 def final_active_branch_count(proof: Dict[str, Any]) -> int:
     """Count branches still unresolved after the full pipeline, not before fallback."""
     if proof.get("status") != "partial":
@@ -2301,6 +2319,13 @@ def run_pair(params: Dict[str, str]) -> str:
     x_index = graph_index(x_path)
     w_index = graph_index(w_path)
     final_active_count = final_active_branch_count(proof)
+    used_three_strand = proof_used_three_strand_relation(proof)
+    three_strand_warning = ""
+    if used_three_strand:
+        three_strand_warning = (
+            '<div class="relation-warning"><strong>Warning:</strong> '
+            'the 3-strand relation was used to compute this pairing value.</div>'
+        )
     branch_ledger_html = render_branch_ledger_section(
         x_graph,
         w_graph,
@@ -2525,7 +2550,7 @@ def run_pair(params: Dict[str, str]) -> str:
           <div class="result-pill">{html.escape(proof['status'])}</div>
           <div class="metric"><span>Fork-killed branches</span><strong>{proof['discharged_term_count']}</strong></div>
           <div class="metric"><span>Active branches left</span><strong>{final_active_count}</strong></div>
-          <div class="metric"><span>Final pairing value</span><strong>{proof.get('final_pairing_value')}</strong></div>
+          <div class="metric"><span>Final pairing value</span><strong>{proof.get('final_pairing_value')}</strong>{three_strand_warning}</div>
         </section>
         <section class="toc">
           <h2>What the page is showing</h2>
@@ -2821,6 +2846,7 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
     .metric {{ display:flex; flex-direction:column; gap:4px; min-width:120px; }}
     .metric span, .muted, .web-subtitle, .pair-note {{ color:var(--muted); font-size:13px; }}
     .metric strong {{ font-size:24px; }}
+    .relation-warning {{ margin-top:6px; padding:8px 10px; border:1px solid #d99a22; border-radius:6px; background:#fff4d6; color:#704600; font-size:12px; font-weight:normal; max-width:280px; }}
     .word {{ font-family: Georgia, serif; letter-spacing:.5px; }}
     .step-head {{ display:flex; justify-content:space-between; align-items:baseline; gap:20px; margin-bottom:14px; }}
     .grid {{ display:grid; gap:14px; }}
