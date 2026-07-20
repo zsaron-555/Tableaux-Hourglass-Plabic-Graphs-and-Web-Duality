@@ -1298,18 +1298,22 @@ def smooth_one_hourglass_embedded(
     w0, w1 = int(adj[white]["top"]), int(adj[white]["bot"])
     b0, b1 = int(adj[black]["top"]), int(adj[black]["bot"])
 
+    # In the disk/ribbon convention used by the pictures, the strand that
+    # leaves the top slot of the white endpoint and arrives at the bottom slot
+    # of the black endpoint is the crossing branch.  The same-slot pairing is
+    # the parallel branch.  The algebraic skein sign remains crossing - parallel.
     if smoothing == "crossing":
-        pairings = [(w0, white, b0, black), (w1, white, b1, black)]
-    else:
         pairings = [(w0, white, b1, black), (w1, white, b0, black)]
+    else:
+        pairings = [(w0, white, b0, black), (w1, white, b1, black)]
 
     new_adj = copy.deepcopy(adj)
     if smoothing == "crossing":
-        splice_pair(new_adj, white, w0, black, b0)
-        splice_pair(new_adj, white, w1, black, b1)
-    else:
         splice_pair(new_adj, white, w0, black, b1)
         splice_pair(new_adj, white, w1, black, b0)
+    else:
+        splice_pair(new_adj, white, w0, black, b0)
+        splice_pair(new_adj, white, w1, black, b1)
 
     curves: Dict[Tuple[int, int], List[Tuple[float, float]]] = {}
     if node_xy:
@@ -1437,8 +1441,6 @@ def smooth_one_hourglass_embedded(
                     # versions retested old curved edges as straight chords,
                     # creating false untwists late in a branch.
                     if not shared_leaf_crossing:
-                        continue
-                    if boundary_labels and not cyclic_issue:
                         continue
                     key = (int(leaf), int(new_neighbor), int(existing_neighbor))
                     if key in seen_untwists:
