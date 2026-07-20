@@ -21,6 +21,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 Pair = Tuple[int, int]
 APP_DIR = Path(__file__).resolve().parent
 LEMMA49_EXEMPLAR_PATH = APP_DIR / "bcgmmw_lemma49_exemplars_0714.json"
+SL4_LEMMA49_ZERO_PATTERN_DIR = APP_DIR / "sl4_lemma49_zero_patterns"
 
 
 FIGURE43_CASES: Dict[Tuple[Tuple[str, str, str, str], Tuple[str, str, str, str]], Dict[str, Any]] = {
@@ -206,3 +207,32 @@ def lemma49_rule_catalog() -> List[Dict[str, Any]]:
 def load_lemma49_exemplars(path: str | Path = LEMMA49_EXEMPLAR_PATH) -> Dict[str, Any]:
     with Path(path).open("r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def load_sl4_lemma49_zero_patterns(
+    pattern_dir: str | Path = SL4_LEMMA49_ZERO_PATTERN_DIR,
+) -> Dict[str, Any]:
+    """Load the user-supplied SL4 analogue patterns as zero-discharge rules.
+
+    These are paired embedded local patterns: a match requires both the W and
+    X windows from the same catalogue entry.  The manifest records which
+    cyclic shifts, reflections, and W/X swaps are allowed.
+    """
+    root = Path(pattern_dir)
+    with (root / "manifest.json").open("r", encoding="utf-8") as handle:
+        manifest = json.load(handle)
+
+    patterns = []
+    for entry in manifest.get("patterns", []):
+        with (root / entry["file"]).open("r", encoding="utf-8") as handle:
+            pattern = json.load(handle)
+        conclusion = pattern.get("conclusion", {})
+        if conclusion.get("action") != "discharge_pair" or conclusion.get("pairing_value") != 0:
+            raise ValueError(f"{entry['file']} is not an SL4 zero-discharge pattern")
+        patterns.append(pattern)
+    return {"manifest": manifest, "patterns": patterns}
+
+
+def sl4_lemma49_zero_rule_catalog() -> List[Dict[str, Any]]:
+    """Return the seven paired SL4 Lemma 4.9 analogue rules."""
+    return load_sl4_lemma49_zero_patterns()["patterns"]

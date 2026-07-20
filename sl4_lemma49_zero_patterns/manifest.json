@@ -1,0 +1,33 @@
+{
+  "schema": "sl4_lemma49_zero_manifest_v1",
+  "source": {
+    "document": "Lem 4.9 abefghi (1).pdf",
+    "description": "User-supplied SL4 analogues of BCGMMW Lemma 4.9",
+    "transcribed_on": "2026-07-20"
+  },
+  "matching_convention": {
+    "same_cyclic_boundary_interval": true,
+    "allow_cyclic_shift_of_disk_labels": true,
+    "allow_reflection": true,
+    "allow_swap_W_X": true,
+    "preserve_black_white_colors": true,
+    "preserve_edge_kind_and_multiplicity": true,
+    "preserve_rotation_system": true,
+    "ports_are_half_edges_leaving_the_local_window": true,
+    "crossings_are_not_vertices": true
+  },
+  "terminal_action": {
+    "action": "discharge_pair",
+    "reason": "sl4_lemma49_zero_pattern",
+    "pairing_value": 0
+  },
+  "patterns": [
+    {"id": "sl4_lemma49_a", "file": "a.json", "source_pages": [1, 2]},
+    {"id": "sl4_lemma49_b", "file": "b.json", "source_pages": [1, 3, 4]},
+    {"id": "sl4_lemma49_e", "file": "e.json", "source_pages": [1, 5, 6]},
+    {"id": "sl4_lemma49_f", "file": "f.json", "source_pages": [1, 7, 8]},
+    {"id": "sl4_lemma49_g", "file": "g.json", "source_pages": [1, 9, 10]},
+    {"id": "sl4_lemma49_h", "file": "h.json", "source_pages": [1, 11]},
+    {"id": "sl4_lemma49_i", "file": "i.json", "source_pages": [1, 12, 13]}
+  ]
+}

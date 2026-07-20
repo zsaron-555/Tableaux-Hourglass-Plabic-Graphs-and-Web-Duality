@@ -2044,6 +2044,7 @@ def render_branch_ledger_section(
 
 def compute_pair_context(params: Dict[str, str]) -> Dict[str, Any]:
     x_path, w_path, pair_mode = resolve_pair(params)
+    x_word = graph_word(x_path)
     max_steps_raw = params.get("max_steps", "").strip()
     max_steps = None if max_steps_raw in {"", "auto", "8"} else int(max_steps_raw)
     beam_width = int(params.get("beam_width", "120") or "120")
@@ -2074,6 +2075,7 @@ def compute_pair_context(params: Dict[str, str]) -> Dict[str, Any]:
         x_node_xy=x_node_xy,
         w_node_colors=w_node_colors,
         w_node_xy=w_node_xy,
+        source_web_sign=wrench.word_inversion_sign(x_word),
     )
     if max_steps is not None and proof.get("active_term_count", 0):
         auto_proof = wrench.prove_pair_value_complete_pipeline(
@@ -2093,6 +2095,7 @@ def compute_pair_context(params: Dict[str, str]) -> Dict[str, Any]:
             x_node_xy=x_node_xy,
             w_node_colors=w_node_colors,
             w_node_xy=w_node_xy,
+            source_web_sign=wrench.word_inversion_sign(x_word),
         )
         auto_proof["auto_continued_from_step_cap"] = max_steps
         proof = auto_proof
@@ -2540,7 +2543,8 @@ def render_relation_rule_section(w_graph: Dict[str, Any], x_graph: Dict[str, Any
     w_matches = relation_rules.detect_gppss_figure43_four_cycles(w_graph)
     x_matches = relation_rules.detect_gppss_figure43_four_cycles(x_graph)
     lemma49_items = relation_rules.lemma49_rule_catalog()
-    if not w_matches and not x_matches and not lemma49_items:
+    sl4_lemma49_items = relation_rules.sl4_lemma49_zero_rule_catalog()
+    if not w_matches and not x_matches and not lemma49_items and not sl4_lemma49_items:
         return ""
 
     def rows(side: str, matches: List[Dict[str, Any]]) -> str:
@@ -2562,6 +2566,9 @@ def render_relation_rule_section(w_graph: Dict[str, Any], x_graph: Dict[str, Any
         f"<p class=\"muted\">Loaded {len(lemma49_items)} BCGMMW Lemma 4.9 exemplar snippets "
         "from <span class=\"word\">bcgmmw_lemma49_exemplars_0714.json</span>. "
         "These snippets are available for boundary-window matching; branch signs are still used in pairing values.</p>"
+        f"<p class=\"muted\">Loaded {len(sl4_lemma49_items)} paired SL4 analogue zero rules "
+        "from <span class=\"word\">sl4_lemma49_zero_patterns/</span>. "
+        "When both local windows match, the terminal action is <span class=\"word\">discharge_pair</span> with pairing value 0.</p>"
     )
 
     figure43_table = ""

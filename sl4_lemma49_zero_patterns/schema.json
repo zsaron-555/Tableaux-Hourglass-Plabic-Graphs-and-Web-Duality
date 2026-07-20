@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sl4_lemma49_zero_pair_v1",
+  "title": "Embedded local SL4 zero-pair pattern",
+  "type": "object",
+  "required": ["schema", "id", "source", "matching", "conclusion", "W", "X"],
+  "properties": {
+    "schema": {"const": "sl4_lemma49_zero_pair_v1"},
+    "id": {"type": "string"},
+    "source": {"type": "object"},
+    "matching": {"type": "object"},
+    "conclusion": {
+      "type": "object",
+      "required": ["action", "pairing_value"],
+      "properties": {
+        "action": {"const": "discharge_pair"},
+        "pairing_value": {"const": 0}
+      }
+    },
+    "W": {"$ref": "#/$defs/localWeb"},
+    "X": {"$ref": "#/$defs/localWeb"}
+  },
+  "$defs": {
+    "localWeb": {
+      "type": "object",
+      "required": ["boundary_order", "ports", "nodes", "edges", "crossings"],
+      "properties": {
+        "boundary_order": {"type": "array", "items": {"type": "string"}},
+        "ports": {"type": "array", "items": {"type": "string"}},
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "role", "color", "x", "y"]
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "u", "v", "kind", "multiplicity"]
+          }
+        },
+        "crossings": {"type": "array"}
+      }
+    }
+  }
+}
