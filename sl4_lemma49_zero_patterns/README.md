@@ -3,9 +3,10 @@
 This directory transcribes the blue-boxed candidate SL4 analogues in
 `Lem 4.9 abefghi (1).pdf`.
 
-The catalogue contains cases `a`, `b`, `e`, `f`, `g`, `h`, and `i`. Each case
-is a **paired** local condition: both its `W` and `X` windows must match before
-the branch may be discharged.
+The catalogue contains cases `a`, `b`, `e`, `f`, `g`, `h`, and `i`, plus the
+user-supplied `extra_outer_pair_four_fan` pattern. Each case is a **paired**
+local condition: both its `W` and `X` windows must match before the branch may
+be discharged.
 
 ## Matcher contract
 
