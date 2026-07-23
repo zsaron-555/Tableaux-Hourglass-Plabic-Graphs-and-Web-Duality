@@ -1,19 +1,16 @@
 """
 full_pipeline.py
 
-Filtering pipeline:
+Complete filtering pipeline:
   1. Load all 48,056 web JSONs
-  2. For each (W, X) pair from Lemma 4.6 survivors, apply Lemma 4.9 patterns
-  3. Output surviving pairs
-
-NOTE: The (1,16) cyclic fork check has been removed pending clarification
-from Gregg on the exact condition. Lemma 4.6 already eliminates pairs where
-both W and X have fork at position 16 (the cyclic wrap). If additional
-elimination is needed, the rotation-corrected check needs to be implemented
-correctly.
+  2. For each (W, X) pair surviving Lemma 4.6, check the (1,16) fork rule
+     using Definition 4.4: fork requires a SINGLE (ordinary) edge from each
+     boundary vertex to a common internal vertex. Hourglass edges do NOT count.
+  3. Apply all 8 Lemma 4.9 boundary patterns
+  4. Output surviving pairs
 
 Usage (one line on Windows from Downloads folder):
-  python3 full_pipeline.py --graphs 4x4_All_graph_data\4x4_All_graph_data --patterns Tableaux-Hourglass-Plabic-Graphs-and-Web-Duality\sl4_lemma49_zero_patterns --forks lemma46_survivors.csv
+  python3 full_pipeline.py --graphs 4x4_All_graph_data\4x4_All_graph_data --patterns Tableaux-Hourglass-Plabic-Graphs-and-Web-Duality\sl4_lemma49_zero_patterns --forks lemma46_survivors_v2.csv
 """
 
 import json, csv, glob, os, argparse, ast
@@ -81,6 +78,30 @@ def build_adj(data):
         key=lambda nid: nodes[nid]['bl']
     )
     return nodes, dict(adj), bseq
+
+# ── (1,16) fork check ─────────────────────────────────────────────────────────
+def has_fork_at_1_16(nodes, adj, bseq):
+    """
+    Definition 4.4: fork at (1,16) means boundary vertices 1 and 16 are each
+    connected to a common internal vertex by a SINGLE (ordinary) edge.
+    Hourglass edges do NOT count.
+    """
+    b1  = bseq[0]   # boundary label 1
+    b16 = bseq[-1]  # boundary label 16
+
+    white_nbrs_1 = {
+        nbr for nbr, kind, mult in adj.get(b1, [])
+        if kind == 'ordinary'
+        and nodes.get(nbr, {}).get('color') == 'white'
+        and not nodes.get(nbr, {}).get('is_boundary')
+    }
+    white_nbrs_16 = {
+        nbr for nbr, kind, mult in adj.get(b16, [])
+        if kind == 'ordinary'
+        and nodes.get(nbr, {}).get('color') == 'white'
+        and not nodes.get(nbr, {}).get('is_boundary')
+    }
+    return bool(white_nbrs_1 & white_nbrs_16)
 
 # ── Lemma 4.9 pattern matching ────────────────────────────────────────────────
 def match_side(pat_side, g_nodes, g_adj, bseq, allow_reflection=False):
@@ -160,15 +181,10 @@ def load_fork_survivors(path):
     pairs = []
     with open(path, newline='') as f:
         reader = csv.DictReader(f)
-        # handle both CSV formats
-        fieldnames = reader.fieldnames
         for row in reader:
             w = row['w_word']
-            if 'survivor_words' in row:
-                for x in ast.literal_eval(row['survivor_words']):
-                    pairs.append((w, x))
-            elif 'x_word' in row:
-                pairs.append((w, row['x_word']))
+            for x in ast.literal_eval(row['survivor_words']):
+                pairs.append((w, x))
     print(f'Loaded {len(pairs):,} Lemma 4.6 pairs')
     return pairs
 
@@ -191,6 +207,7 @@ def main():
 
     print(f'\nProcessing {len(pairs):,} pairs...')
     survivors           = []
+    elim_16_1           = 0
     elim_lemma49        = 0
     elim_lemma49_counts = Counter()
     skipped             = 0
@@ -203,9 +220,18 @@ def main():
             skipped += 1
             continue
 
-        elim, pat_id = eliminated_by_lemma49(
-            patterns, adj_cache[w_word], adj_cache[x_word]
-        )
+        w_adj = adj_cache[w_word]
+        x_adj = adj_cache[x_word]
+        wn,wa,wb = w_adj
+        xn,xa,xb = x_adj
+
+        # Step 1: (1,16) fork check — ordinary edges only per Definition 4.4
+        if has_fork_at_1_16(wn,wa,wb) and has_fork_at_1_16(xn,xa,xb):
+            elim_16_1 += 1
+            continue
+
+        # Step 2: Lemma 4.9 boundary patterns
+        elim, pat_id = eliminated_by_lemma49(patterns, w_adj, x_adj)
         if elim:
             elim_lemma49 += 1
             elim_lemma49_counts[pat_id] += 1
@@ -213,24 +239,19 @@ def main():
 
         survivors.append((w_word, x_word))
 
-    # count distinct w and x words
-    distinct_w = len(set(w for w,x in survivors))
-    distinct_x = len(set(x for w,x in survivors))
-
     with open(args.out, 'w', newline='') as f:
         w = csv.writer(f, delimiter='\t')
         w.writerow(['w_word','x_word'])
         w.writerows(survivors)
 
     lines = [
-        'Full pipeline summary (Lemma 4.9 only)',
-        '=======================================',
-        f'Input (Lemma 4.6 survivors):      {len(pairs):,}',
-        f'Eliminated by Lemma 4.9:          {elim_lemma49:,}',
-        f'Surviving pairs:                  {len(survivors):,}',
-        f'Distinct W words:                 {distinct_w:,}',
-        f'Distinct X words:                 {distinct_x:,}',
-        f'Skipped (no graph data):          {skipped:,}',
+        'Full pipeline summary',
+        '=====================',
+        f'Input (Lemma 4.6 survivors):       {len(pairs):,}',
+        f'Eliminated by (1,16) fork check:   {elim_16_1:,}',
+        f'Eliminated by Lemma 4.9 patterns:  {elim_lemma49:,}',
+        f'Surviving:                         {len(survivors):,}',
+        f'Skipped (no graph data):           {skipped:,}',
         '',
         'Lemma 4.9 breakdown:',
     ] + [f'  {pid}: {cnt}' for pid,cnt in elim_lemma49_counts.most_common()]
