@@ -57,6 +57,13 @@ COLORS = {
 }
 
 
+def param_bool(params: Dict[str, str], name: str, default: bool = True) -> bool:
+    raw = params.get(name)
+    if raw is None or raw == "":
+        return default
+    return str(raw).lower() not in {"0", "false", "no", "off"}
+
+
 def unique_existing_paths(paths: Iterable[Path]) -> List[Path]:
     seen = set()
     out = []
@@ -1562,6 +1569,7 @@ def branch_terminal_picture(
     w_hgs: List[wrench.Hourglass],
     history: List[Dict[str, Any]],
     fork: Optional[List[int]],
+    lemma49_match: Optional[Dict[str, Any]] = None,
 ) -> str:
     try:
         branch_x, branch_xh, branch_w, branch_wh = wrench.replay_pair_history(
@@ -1575,10 +1583,19 @@ def branch_terminal_picture(
         return f'<p class="muted">Could not replay this branch picture: {html.escape(str(exc))}</p>'
     x_curves = wrench.edge_curves_from_history(history, "X", branch_x)
     w_curves = wrench.edge_curves_from_history(history, "W", branch_w)
+    w_edges: Dict[Tuple[int, int], str] = {}
+    x_edges: Dict[Tuple[int, int], str] = {}
+    w_hg_colors: Dict[Tuple[int, int], Tuple[str, str]] = {}
+    x_hg_colors: Dict[Tuple[int, int], Tuple[str, str]] = {}
+    w_rings: Dict[int, str] = {}
+    x_rings: Dict[int, str] = {}
+    if lemma49_match:
+        w_edges, w_hg_colors, w_rings = lemma49_highlight_maps(lemma49_match, "W")
+        x_edges, x_hg_colors, x_rings = lemma49_highlight_maps(lemma49_match, "X")
     return f"""
     <div class="mini-pair branch-terminal-pair">
-      {draw_web_svg('W terminal state', w_graph, branch_w, branch_wh, highlight_fork=fork, edge_curves=w_curves, size=270)}
-      {draw_web_svg('X terminal state', x_graph, branch_x, branch_xh, highlight_fork=fork, edge_curves=x_curves, size=270)}
+      {draw_web_svg('W terminal state', w_graph, branch_w, branch_wh, highlight_fork=fork, edge_colors=w_edges, hourglass_colors=w_hg_colors, node_ring_colors=w_rings, edge_curves=w_curves, size=270)}
+      {draw_web_svg('X terminal state', x_graph, branch_x, branch_xh, highlight_fork=fork, edge_colors=x_edges, hourglass_colors=x_hg_colors, node_ring_colors=x_rings, edge_curves=x_curves, size=270)}
     </div>
     """
 
@@ -1864,16 +1881,31 @@ def move_sequence_table_lazy(history: List[Dict[str, Any]], branch_id: str) -> s
 def terminal_branch_records(proof: Dict[str, Any]) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
     for idx, term in enumerate(proof.get("discharged_terms", []), start=1):
+        reason = str(term.get("reason", "fork_lemma"))
+        is_lemma49 = reason == "lemma49_zero"
+        is_lemma48 = reason == "lemma48_zero"
+        source_case = term.get("lemma49_case", "") if is_lemma49 else term.get("lemma48_case", "")
+        details = ""
+        if is_lemma49:
+            details = (
+                f"{term.get('lemma49_rule_id', '')}"
+                f" case {source_case}; interval {term.get('lemma49_boundary_labels', [])}"
+            )
+        elif is_lemma48:
+            details = (
+                f"{term.get('lemma48_rule_id', '')}"
+                f" case {source_case}; interval {term.get('lemma48_boundary_labels', [])}"
+            )
         records.append(
             {
-                "id": f"K{idx:03d}",
-                "kind": "fork lemma",
+                "id": f"{'L' if is_lemma49 else ('M' if is_lemma48 else 'K')}{idx:03d}",
+                "kind": "Lemma 4.9 analogue" if is_lemma49 else ("Lemma 4.8 analogue" if is_lemma48 else "fork lemma"),
                 "status": "killed",
                 "coeff": term.get("coeff", ""),
                 "value": 0,
                 "history": term.get("history", []),
                 "forks": term.get("common_forks", []),
-                "reason": term.get("reason", "fork_lemma"),
+                "reason": details or reason,
                 "raw": term,
             }
         )
@@ -2068,6 +2100,9 @@ def compute_pair_context(params: Dict[str, str]) -> Dict[str, Any]:
     beam_width = int(params.get("beam_width", "120") or "120")
 
     allow_w = False
+    apply_lemma49 = param_bool(params, "apply_lemma49", True)
+    apply_lemma48 = param_bool(params, "apply_lemma48", True)
+    allow_three_strand = param_bool(params, "allow_three_strand", True)
 
 
     x_adj, x_bounds, x_hgs = wrench.parse_web(x_path)
@@ -2094,6 +2129,9 @@ def compute_pair_context(params: Dict[str, str]) -> Dict[str, Any]:
         w_node_colors=w_node_colors,
         w_node_xy=w_node_xy,
         source_web_sign=wrench.word_inversion_sign(x_word),
+        use_lemma49=apply_lemma49,
+        use_lemma48=apply_lemma48,
+        allow_three_strand=allow_three_strand,
     )
     if max_steps is not None and proof.get("active_term_count", 0):
         auto_proof = wrench.prove_pair_value_complete_pipeline(
@@ -2114,6 +2152,9 @@ def compute_pair_context(params: Dict[str, str]) -> Dict[str, Any]:
             w_node_colors=w_node_colors,
             w_node_xy=w_node_xy,
             source_web_sign=wrench.word_inversion_sign(x_word),
+            use_lemma49=apply_lemma49,
+            use_lemma48=apply_lemma48,
+            allow_three_strand=allow_three_strand,
         )
         auto_proof["auto_continued_from_step_cap"] = max_steps
         proof = auto_proof
@@ -2159,6 +2200,7 @@ def render_branch_view(params: Dict[str, str]) -> str:
             context["w_hgs"],
             history,
             fork,
+            raw.get("lemma49_match") or raw.get("lemma48_match"),
         )
         if raw.get("term_value") is not None:
             coloring = render_coloring_section(
@@ -2239,6 +2281,7 @@ def render_branch_page(params: Dict[str, str]) -> str:
         context["w_hgs"],
         history,
         fork,
+        raw.get("lemma49_match") or raw.get("lemma48_match"),
     )
     coloring = ""
     if raw.get("term_value") is not None:
@@ -2315,15 +2358,21 @@ def lemma49_highlight_maps(match: Dict[str, Any], side: str) -> Tuple[Dict[Tuple
     return ordinary_edges, hourglass_edges, node_rings
 
 
-def render_lemma49_discharge_if_present(params: Dict[str, str]) -> Optional[str]:
+def render_zero_discharge_if_present(params: Dict[str, str]) -> Optional[str]:
     x_path, w_path, pair_mode = resolve_pair(params)
     x_graph = load_json(x_path)
     w_graph = load_json(w_path)
-    matches = relation_rules.detect_sl4_lemma49_zero_pair(w_graph, x_graph, max_matches=1)
+    matches: List[Tuple[str, Dict[str, Any]]] = []
+    if param_bool(params, "apply_lemma49", True):
+        lemma49_matches = relation_rules.detect_sl4_lemma49_zero_pair(w_graph, x_graph, max_matches=1)
+        matches.extend(("lemma49", match) for match in lemma49_matches)
+    if not matches and param_bool(params, "apply_lemma48", True):
+        lemma48_matches = relation_rules.detect_sl4_lemma48_zero_pair(w_graph, x_graph, max_matches=1)
+        matches.extend(("lemma48", match) for match in lemma48_matches)
     if not matches:
         return None
 
-    match = matches[0]
+    lemma_kind, match = matches[0]
     x_adj, _, x_hgs = wrench.parse_web(x_path)
     w_adj, _, w_hgs = wrench.parse_web(w_path)
     x_word = graph_word(x_path)
@@ -2335,6 +2384,10 @@ def render_lemma49_discharge_if_present(params: Dict[str, str]) -> Optional[str]
     source = match.get("source", {})
     source_case = source.get("case") or match.get("reason") or match.get("rule_id", "")
     orientation_note = []
+    if match.get("disk_rotated"):
+        orientation_note.append(
+            f"disk-rotated local window starting at boundary label {match.get('disk_rotation_start')}"
+        )
     if match.get("reflected"):
         orientation_note.append("reflected boundary interval")
     if match.get("pair_swapped"):
@@ -2342,6 +2395,10 @@ def render_lemma49_discharge_if_present(params: Dict[str, str]) -> Optional[str]
     orientation_html = ""
     if orientation_note:
         orientation_html = f"<p class=\"muted\">Orientation: {html.escape('; '.join(orientation_note))}.</p>"
+    lemma_label = "Lemma 4.9 analogue" if lemma_kind == "lemma49" else "Lemma 4.8 analogue"
+    pill = "lemma49_zero" if lemma_kind == "lemma49" else "lemma48_zero"
+    pattern_dir = "sl4_lemma49_zero_patterns/" if lemma_kind == "lemma49" else "sl4_lemma48_zero_patterns/"
+    heading = "Matched Lemma 4.9 Forbidden Pattern" if lemma_kind == "lemma49" else "Matched Lemma 4.8 Zero Pattern"
 
     return page_shell(
         params,
@@ -2352,18 +2409,18 @@ def render_lemma49_discharge_if_present(params: Dict[str, str]) -> Optional[str]
             <p><strong>Mode:</strong> {html.escape(pair_mode)}</p>
             <p><strong>W:</strong> <span class="muted">{w_index:04d}</span> <span class="word">{html.escape(w_word)}</span></p>
             <p><strong>X:</strong> <span class="muted">{x_index:04d}</span> <span class="word">{html.escape(x_word)}</span></p>
-            <p><strong>Lemma 4.9 analogue:</strong> eliminated by <span class="word">{html.escape(match.get('rule_id', ''))}</span>, case <span class="word">{html.escape(str(source_case))}</span>.</p>
-            <p class="muted">This was detected directly from the W/X graph JSONs by matching the local pattern files in <span class="word">sl4_lemma49_zero_patterns/</span>; no survivor TSV lookup was used.</p>
+            <p><strong>{lemma_label}:</strong> eliminated by <span class="word">{html.escape(match.get('rule_id', ''))}</span>, case <span class="word">{html.escape(str(source_case))}</span>.</p>
+            <p class="muted">This was detected directly from the W/X graph JSONs using <span class="word">{html.escape(pattern_dir)}</span>; no survivor TSV lookup was used.</p>
             {orientation_html}
           </div>
-          <div class="result-pill">lemma49_zero</div>
+          <div class="result-pill">{pill}</div>
           <div class="metric"><span>Matched boundary interval</span><strong>{html.escape(str(match.get('boundary_labels', [])))}</strong></div>
           <div class="metric"><span>Active branches left</span><strong>0</strong></div>
           <div class="metric"><span>Final pairing value</span><strong>0</strong></div>
         </section>
         <section class="step">
           <div class="step-head">
-            <div><strong>Matched Lemma 4.9 Forbidden Pattern</strong></div>
+            <div><strong>{heading}</strong></div>
             <div class="muted">Orange rings and edges mark the local zero pattern.</div>
           </div>
           <div class="grid two">
@@ -2377,9 +2434,9 @@ def render_lemma49_discharge_if_present(params: Dict[str, str]) -> Optional[str]
 
 
 def run_pair(params: Dict[str, str]) -> str:
-    lemma49_discharge = render_lemma49_discharge_if_present(params)
-    if lemma49_discharge is not None:
-        return lemma49_discharge
+    zero_discharge = render_zero_discharge_if_present(params)
+    if zero_discharge is not None:
+        return zero_discharge
 
     context = compute_pair_context(params)
     x_path = context["x_path"]
@@ -2542,7 +2599,7 @@ def run_pair(params: Dict[str, str]) -> str:
                     <div><strong>Trace Complete</strong></div>
                     <div class="muted">The displayed path has {len(steps)} wrench moves; the full proof discharged all branches.</div>
                   </div>
-                  <p>No further continuing-branch pictures are shown because there is no surviving branch left to continue. The proof search killed {proof.get('discharged_term_count', 0)} branch(es) by the fork lemma and the final pairing value is 0.</p>
+                  <p>No further continuing-branch pictures are shown because there is no surviving branch left to continue. The proof search killed {proof.get('discharged_term_count', 0)} branch(es) by the fork lemma or enabled zero-pattern detectors, and the final pairing value is 0.</p>
                 </section>
                 """
             )
@@ -2630,7 +2687,7 @@ def run_pair(params: Dict[str, str]) -> str:
             {fallback_note}
           </div>
           <div class="result-pill">{html.escape(proof['status'])}</div>
-          <div class="metric"><span>Fork-killed branches</span><strong>{proof['discharged_term_count']}</strong></div>
+          <div class="metric"><span>Fork/Lemma-killed branches</span><strong>{proof['discharged_term_count']}</strong></div>
           <div class="metric"><span>Active branches left</span><strong>{final_active_count}</strong></div>
           <div class="metric"><span>Final pairing value</span><strong>{proof.get('final_pairing_value')}</strong>{three_strand_warning}</div>
         </section>
@@ -2651,7 +2708,8 @@ def render_relation_rule_section(w_graph: Dict[str, Any], x_graph: Dict[str, Any
     x_matches = relation_rules.detect_gppss_figure43_four_cycles(x_graph)
     lemma49_items = relation_rules.lemma49_rule_catalog()
     sl4_lemma49_items = relation_rules.sl4_lemma49_zero_rule_catalog()
-    if not w_matches and not x_matches and not lemma49_items and not sl4_lemma49_items:
+    sl4_lemma48_items = relation_rules.sl4_lemma48_zero_rule_catalog()
+    if not w_matches and not x_matches and not lemma49_items and not sl4_lemma49_items and not sl4_lemma48_items:
         return ""
 
     def rows(side: str, matches: List[Dict[str, Any]]) -> str:
@@ -2676,6 +2734,9 @@ def render_relation_rule_section(w_graph: Dict[str, Any], x_graph: Dict[str, Any
         f"<p class=\"muted\">Loaded {len(sl4_lemma49_items)} paired SL4 analogue zero rules "
         "from <span class=\"word\">sl4_lemma49_zero_patterns/</span>. "
         "When both local windows match, the terminal action is <span class=\"word\">discharge_pair</span> with pairing value 0.</p>"
+        f"<p class=\"muted\">Loaded {len(sl4_lemma48_items)} GL4 Lemma 4.8 zero rule "
+        "from <span class=\"word\">sl4_lemma48_zero_patterns/</span>. "
+        "This variable-window detector discharges the pair when the GL4 coloring contradiction is visible in the graph data.</p>"
     )
 
     figure43_table = ""
@@ -2886,6 +2947,9 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
     beam = html.escape(params.get("beam_width", "120"))
     allow_w = ""
     show_steps = "checked" if params.get("show_steps") == "1" else ""
+    apply_lemma49 = "checked" if param_bool(params, "apply_lemma49", True) else ""
+    apply_lemma48 = "checked" if param_bool(params, "apply_lemma48", True) else ""
+    allow_three_strand = "checked" if param_bool(params, "allow_three_strand", True) else ""
     has_visible_manual_pair = bool(params.get("w", "").strip() and params.get("x", "").strip())
     use_transpose = "checked" if params.get("use_transpose") == "1" and not has_visible_manual_pair else ""
     survivor_menu = survivor_selector_html(params)
@@ -2904,7 +2968,7 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
     h2 {{ margin:0 0 10px; font-size:20px; }}
     h3 {{ margin:0 0 8px; font-size:17px; }}
     p {{ margin:6px 0; }}
-    form {{ display:grid; grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr) 120px 120px 180px 150px 130px; gap:12px; align-items:end; margin-top:18px; }}
+    form {{ display:grid; grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr) 120px 120px 180px 150px 150px 150px 150px 130px; gap:12px; align-items:end; margin-top:18px; }}
     label {{ display:flex; flex-direction:column; gap:6px; color:var(--muted); font-size:13px; }}
     input[type=text], input[type=number], select {{ padding:10px 11px; border:1px solid var(--line); border-radius:7px; font-size:14px; background:#fff; color:var(--ink); }}
     select {{ width:100%; }}
@@ -2970,6 +3034,12 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
       <label>Step cap, optional<input name="max_steps" type="number" value="{max_steps}" min="0" placeholder="auto"></label>
       <label>Beam width<input name="beam_width" type="number" value="{beam}" min="1"></label>
       <label class="check muted"><input type="checkbox" disabled> W is passive; apply relations only to X</label>
+      <input type="hidden" name="apply_lemma49" value="0">
+      <label class="check"><input type="checkbox" name="apply_lemma49" value="1" {apply_lemma49}> apply Lemma 4.9</label>
+      <input type="hidden" name="apply_lemma48" value="0">
+      <label class="check"><input type="checkbox" name="apply_lemma48" value="1" {apply_lemma48}> apply Lemma 4.8</label>
+      <input type="hidden" name="allow_three_strand" value="0">
+      <label class="check"><input type="checkbox" name="allow_three_strand" value="1" {allow_three_strand}> allow 3-strand relation</label>
       <label class="check"><input type="checkbox" name="show_steps" value="1" {show_steps}> show full step pictures</label>
       <button type="submit">Run proof search</button>
       <div id="survivor-menu-slot">

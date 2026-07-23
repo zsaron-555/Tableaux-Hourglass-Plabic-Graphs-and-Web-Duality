@@ -1,0 +1,36 @@
+{
+  "schema": "sl4_lemma48_zero_pair_v1",
+  "id": "sl4_lemma48_gl4_interval_fan_chain",
+  "source": {
+    "document": "Lemma4.8_SL4.pdf",
+    "lemma": "generalized BCGMMW Lemma 4.8",
+    "specialization": "GL4",
+    "case": "variable cyclic interval fan-chain zero"
+  },
+  "matching": {
+    "same_boundary_interval": true,
+    "allow_disk_rotation": true,
+    "allow_reflection": true,
+    "allow_pair_swap": false,
+    "min_boundary_window": 5,
+    "max_boundary_window": 16,
+    "min_middle_fan_spokes": 2,
+    "component_edges": "ordinary_or_hourglass"
+  },
+  "local_model": {
+    "boundary_interval": ["v1", "v2", "...", "v_a", "v_{a+1}", "v_{a+2}"],
+    "W_requires": [
+      "v_{a+1} and v_{a+2} are incident to the same internal white vertex",
+      "some internal white fan vertex is incident to at least two middle boundary vertices among v2,...,v_a"
+    ],
+    "X_requires": [
+      "v1, v_{a+1}, and v_{a+2} lie in the same underlying connected component, counting hourglass pairs as connections"
+    ],
+    "coloring_contradiction": "X forces the three boundary colors to agree; W then forces two edges incident to one white vertex to have the same color."
+  },
+  "conclusion": {
+    "action": "discharge_pair",
+    "reason": "sl4_lemma48_gl4_interval_fan_chain",
+    "pairing_value": 0
+  }
+}
