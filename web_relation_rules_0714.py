@@ -411,6 +411,12 @@ def _match_pattern_side(
             actual_local_hourglass = graph_parts["hourglass_adj"].get(actual, set()) & mapped_nonports
             if actual_local_hourglass != local_hourglass:
                 return False
+            outside_ordinary = graph_parts["ordinary_adj"].get(actual, set()) - mapped_nonports
+            if outside_ordinary & graph_parts["boundary_nodes"]:
+                return False
+            outside_hourglass = graph_parts["hourglass_adj"].get(actual, set()) - mapped_nonports
+            if outside_hourglass:
+                return False
         return True
 
     def backtrack(index: int, used: Set[int]) -> None:
@@ -466,8 +472,12 @@ def detect_sl4_lemma49_zero_pair(
     This does not consult survivor TSV files.  It searches the actual W and X
     graph data for the paired local JSON snippets in
     ``sl4_lemma49_zero_patterns/``.  The drawn windows are interpreted as
-    subgraph patterns: required internal edges and hourglasses must be present,
-    but extra incident edges leaving the local window are allowed.
+    local window patterns: required internal edges and hourglasses must be
+    present, ordinary strands may leave the window through the open ports, but
+    a matched internal vertex is not allowed to attach to an unhighlighted
+    boundary vertex outside the claimed boundary interval.  This prevents a
+    smaller Lemma 4.9 picture from being falsely embedded across a larger
+    boundary configuration.
     """
     w_parts = _actual_graph_parts(w_graph)
     x_parts = _actual_graph_parts(x_graph)
