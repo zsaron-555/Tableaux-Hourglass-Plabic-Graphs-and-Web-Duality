@@ -2298,7 +2298,89 @@ def render_branch_page(params: Dict[str, str]) -> str:
     )
 
 
+def lemma49_highlight_maps(match: Dict[str, Any], side: str) -> Tuple[Dict[Tuple[int, int], str], Dict[Tuple[int, int], Tuple[str, str]], Dict[int, str]]:
+    side_match = match.get(side, {})
+    ordinary_edges = {
+        tuple(sorted((int(u), int(v)))): "#d97706"
+        for u, v in side_match.get("ordinary_edges", [])
+    }
+    hourglass_edges = {
+        tuple(sorted((int(u), int(v)))): ("#d97706", "#d97706")
+        for u, v in side_match.get("hourglass_edges", [])
+    }
+    node_rings = {
+        int(node): "#d97706"
+        for node in side_match.get("node_map", {}).values()
+    }
+    return ordinary_edges, hourglass_edges, node_rings
+
+
+def render_lemma49_discharge_if_present(params: Dict[str, str]) -> Optional[str]:
+    x_path, w_path, pair_mode = resolve_pair(params)
+    x_graph = load_json(x_path)
+    w_graph = load_json(w_path)
+    matches = relation_rules.detect_sl4_lemma49_zero_pair(w_graph, x_graph, max_matches=1)
+    if not matches:
+        return None
+
+    match = matches[0]
+    x_adj, _, x_hgs = wrench.parse_web(x_path)
+    w_adj, _, w_hgs = wrench.parse_web(w_path)
+    x_word = graph_word(x_path)
+    w_word = graph_word(w_path)
+    x_index = graph_index(x_path)
+    w_index = graph_index(w_path)
+    w_edges, w_hg_colors, w_rings = lemma49_highlight_maps(match, "W")
+    x_edges, x_hg_colors, x_rings = lemma49_highlight_maps(match, "X")
+    source = match.get("source", {})
+    source_case = source.get("case") or match.get("reason") or match.get("rule_id", "")
+    orientation_note = []
+    if match.get("reflected"):
+        orientation_note.append("reflected boundary interval")
+    if match.get("pair_swapped"):
+        orientation_note.append("matched after W/X side swap allowed by the pattern JSON")
+    orientation_html = ""
+    if orientation_note:
+        orientation_html = f"<p class=\"muted\">Orientation: {html.escape('; '.join(orientation_note))}.</p>"
+
+    return page_shell(
+        params,
+        f"""
+        <section class="summary">
+          <div>
+            <h2>Pairing Result</h2>
+            <p><strong>Mode:</strong> {html.escape(pair_mode)}</p>
+            <p><strong>W:</strong> <span class="muted">{w_index:04d}</span> <span class="word">{html.escape(w_word)}</span></p>
+            <p><strong>X:</strong> <span class="muted">{x_index:04d}</span> <span class="word">{html.escape(x_word)}</span></p>
+            <p><strong>Lemma 4.9 analogue:</strong> eliminated by <span class="word">{html.escape(match.get('rule_id', ''))}</span>, case <span class="word">{html.escape(str(source_case))}</span>.</p>
+            <p class="muted">This was detected directly from the W/X graph JSONs by matching the local pattern files in <span class="word">sl4_lemma49_zero_patterns/</span>; no survivor TSV lookup was used.</p>
+            {orientation_html}
+          </div>
+          <div class="result-pill">lemma49_zero</div>
+          <div class="metric"><span>Matched boundary interval</span><strong>{html.escape(str(match.get('boundary_labels', [])))}</strong></div>
+          <div class="metric"><span>Active branches left</span><strong>0</strong></div>
+          <div class="metric"><span>Final pairing value</span><strong>0</strong></div>
+        </section>
+        <section class="step">
+          <div class="step-head">
+            <div><strong>Matched Lemma 4.9 Forbidden Pattern</strong></div>
+            <div class="muted">Orange rings and edges mark the local zero pattern.</div>
+          </div>
+          <div class="grid two">
+            {draw_web_svg('W: highlighted forbidden pattern', w_graph, w_adj, w_hgs, highlight_edges=w_edges, hourglass_colors=w_hg_colors, node_ring_colors=w_rings, size=360)}
+            {draw_web_svg('X: highlighted forbidden pattern', x_graph, x_adj, x_hgs, highlight_edges=x_edges, hourglass_colors=x_hg_colors, node_ring_colors=x_rings, size=360)}
+          </div>
+        </section>
+        {render_relation_rule_section(w_graph, x_graph)}
+        """,
+    )
+
+
 def run_pair(params: Dict[str, str]) -> str:
+    lemma49_discharge = render_lemma49_discharge_if_present(params)
+    if lemma49_discharge is not None:
+        return lemma49_discharge
+
     context = compute_pair_context(params)
     x_path = context["x_path"]
     w_path = context["w_path"]
