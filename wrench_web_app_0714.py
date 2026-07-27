@@ -2101,7 +2101,7 @@ def compute_pair_context(params: Dict[str, str]) -> Dict[str, Any]:
 
     allow_w = False
     apply_lemma49 = param_bool(params, "apply_lemma49", True)
-    apply_lemma48 = param_bool(params, "apply_lemma48", True)
+    apply_lemma48 = param_bool(params, "apply_lemma48", False)
     allow_three_strand = param_bool(params, "allow_three_strand", True)
 
 
@@ -2366,7 +2366,7 @@ def render_zero_discharge_if_present(params: Dict[str, str]) -> Optional[str]:
     if param_bool(params, "apply_lemma49", True):
         lemma49_matches = relation_rules.detect_sl4_lemma49_zero_pair(w_graph, x_graph, max_matches=1)
         matches.extend(("lemma49", match) for match in lemma49_matches)
-    if not matches and param_bool(params, "apply_lemma48", True):
+    if not matches and param_bool(params, "apply_lemma48", False):
         lemma48_matches = relation_rules.detect_sl4_lemma48_zero_pair(w_graph, x_graph, max_matches=1)
         matches.extend(("lemma48", match) for match in lemma48_matches)
     if not matches:
@@ -2948,7 +2948,7 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
     allow_w = ""
     show_steps = "checked" if params.get("show_steps") == "1" else ""
     apply_lemma49 = "checked" if param_bool(params, "apply_lemma49", True) else ""
-    apply_lemma48 = "checked" if param_bool(params, "apply_lemma48", True) else ""
+    apply_lemma48 = "checked" if param_bool(params, "apply_lemma48", False) else ""
     allow_three_strand = "checked" if param_bool(params, "allow_three_strand", True) else ""
     has_visible_manual_pair = bool(params.get("w", "").strip() and params.get("x", "").strip())
     use_transpose = "checked" if params.get("use_transpose") == "1" and not has_visible_manual_pair else ""

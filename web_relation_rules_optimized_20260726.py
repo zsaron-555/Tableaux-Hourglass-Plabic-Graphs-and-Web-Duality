@@ -15,8 +15,12 @@ from __future__ import annotations
 import json
 import math
 import os
+import time
+from collections import Counter, OrderedDict
+from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Set, Tuple
 
 
 Pair = Tuple[int, int]
@@ -254,11 +258,13 @@ def lemma49_rule_catalog() -> List[Dict[str, Any]]:
     return load_lemma49_exemplars()["items"]
 
 
+@lru_cache(maxsize=8)
 def load_lemma49_exemplars(path: str | Path = LEMMA49_EXEMPLAR_PATH) -> Dict[str, Any]:
     with Path(path).open("r", encoding="utf-8") as handle:
         return json.load(handle)
 
 
+@lru_cache(maxsize=8)
 def load_sl4_lemma49_zero_patterns(
     pattern_dir: str | Path = SL4_LEMMA49_ZERO_PATTERN_DIR,
 ) -> Dict[str, Any]:
@@ -302,6 +308,7 @@ def sl4_lemma49_zero_rule_catalog() -> List[Dict[str, Any]]:
     return load_sl4_lemma49_zero_patterns()["patterns"]
 
 
+@lru_cache(maxsize=8)
 def load_sl4_lemma48_zero_patterns(
     pattern_dir: str | Path = SL4_LEMMA48_ZERO_PATTERN_DIR,
 ) -> Dict[str, Any]:
@@ -373,6 +380,76 @@ def _actual_graph_parts(graph: Dict[str, Any]) -> Dict[str, Any]:
         "ordinary_adj": ordinary_adj,
         "hourglass": hourglass,
         "hourglass_adj": hourglass_adj,
+    }
+
+
+def actual_graph_parts_from_native(
+    adj: Mapping[int, Any],
+    boundary_labels: Mapping[int, int],
+    hourglasses: Iterable[Mapping[str, Any]],
+    node_colors: Mapping[int, str],
+) -> Dict[str, Any]:
+    """Build matcher input directly from an evaluator term.
+
+    The legacy matcher first serialized this information to graph JSON and
+    parsed it immediately afterwards.  This native adapter preserves the same
+    ordinary-edge and hourglass sets without allocating that intermediate
+    representation.
+    """
+    node_ids: Set[int] = {int(node) for node in adj}
+    ordinary: Set[Pair] = set()
+    for u_raw, neighbors in adj.items():
+        u = int(u_raw)
+        if isinstance(neighbors, MutableMapping):
+            iterable = [value for value in neighbors.values() if value is not None]
+        else:
+            iterable = [value for value in neighbors if value is not None]
+        for v_raw in iterable:
+            v = int(v_raw)
+            node_ids.add(v)
+            ordinary.add(_pair(u, v))
+
+    hourglass: Set[Pair] = set()
+    for item in hourglasses:
+        white = int(item["white"])
+        black = int(item["black"])
+        if white in node_ids and black in node_ids:
+            hourglass.add(_pair(white, black))
+
+    boundary_by_label = {
+        int(label): int(node)
+        for node, label in boundary_labels.items()
+        if int(node) in node_ids
+    }
+    boundary_nodes = set(boundary_by_label.values())
+    colors = {
+        node: str(node_colors.get(node, "black" if node in boundary_nodes else ""))
+        for node in node_ids
+    }
+    ordinary_adj: Dict[int, Set[int]] = {node: set() for node in node_ids}
+    for u, v in ordinary:
+        ordinary_adj[u].add(v)
+        ordinary_adj[v].add(u)
+    hourglass_adj: Dict[int, Set[int]] = {node: set() for node in node_ids}
+    for u, v in hourglass:
+        hourglass_adj[u].add(v)
+        hourglass_adj[v].add(u)
+
+    internal_by_color: Dict[str, Set[int]] = {}
+    for node, color in colors.items():
+        if node not in boundary_nodes:
+            internal_by_color.setdefault(color, set()).add(node)
+
+    return {
+        "nodes": {node: {"id": node, "color": colors[node]} for node in node_ids},
+        "colors": colors,
+        "boundary_by_label": boundary_by_label,
+        "boundary_nodes": boundary_nodes,
+        "ordinary": ordinary,
+        "ordinary_adj": ordinary_adj,
+        "hourglass": hourglass,
+        "hourglass_adj": hourglass_adj,
+        "internal_by_color": internal_by_color,
     }
 
 
@@ -582,6 +659,383 @@ def _match_pattern_side(
 
     backtrack(0, set(mapped_boundary_nodes))
     return matches
+
+
+def _ensure_graph_indexes(graph_parts: Dict[str, Any]) -> None:
+    if "internal_by_color" in graph_parts:
+        return
+    boundary_nodes = graph_parts["boundary_nodes"]
+    internal_by_color: Dict[str, Set[int]] = {}
+    for node, color in graph_parts["colors"].items():
+        if node not in boundary_nodes:
+            internal_by_color.setdefault(str(color), set()).add(int(node))
+    graph_parts["internal_by_color"] = internal_by_color
+
+
+@dataclass(frozen=True)
+class CompiledPatternSide:
+    parts: Dict[str, Any]
+    internal_color_counts: Tuple[Tuple[str, int], ...]
+
+
+@dataclass(frozen=True)
+class Lemma49ViableSlot:
+    pattern: Dict[str, Any]
+    boundary_labels: Tuple[int, ...]
+    reflected: bool
+    start: int
+    disk_rotated: bool
+    pair_swapped: bool
+    fixed_w_match: Dict[str, Any]
+    x_pattern: CompiledPatternSide
+
+
+@dataclass
+class Lemma49MatcherStats:
+    compile_seconds: float = 0.0
+    fixed_w_exact_checks: int = 0
+    viable_slots: int = 0
+    x_calls: int = 0
+    x_cache_hits: int = 0
+    x_slots_considered: int = 0
+    x_fingerprint_rejects: int = 0
+    x_exact_checks: int = 0
+    x_exact_matches: int = 0
+    x_seconds: float = 0.0
+
+
+@lru_cache(maxsize=1)
+def compiled_sl4_lemma49_pattern_catalog() -> Tuple[Dict[str, Any], ...]:
+    """Parse and index the immutable pattern sides once per process."""
+    compiled: List[Dict[str, Any]] = []
+    for pattern in sl4_lemma49_zero_rule_catalog():
+        item = dict(pattern)
+        item["_compiled_W"] = _compile_pattern_side(pattern["W"])
+        item["_compiled_X"] = _compile_pattern_side(pattern["X"])
+        compiled.append(item)
+    return tuple(compiled)
+
+
+def _compile_pattern_side(pattern_web: Dict[str, Any]) -> CompiledPatternSide:
+    parts = _pattern_web_parts(pattern_web)
+    counts = Counter(
+        str(parts["nodes"][node].get("color", ""))
+        for node in parts["internal"]
+    )
+    return CompiledPatternSide(
+        parts=parts,
+        internal_color_counts=tuple(sorted(counts.items())),
+    )
+
+
+def _graph_parts_key(graph_parts: Dict[str, Any]) -> Tuple[Any, ...]:
+    """ID-sensitive exact key for side-match memoization."""
+    return (
+        tuple(sorted(graph_parts["boundary_by_label"].items())),
+        tuple(sorted(graph_parts["colors"].items())),
+        tuple(sorted(graph_parts["ordinary"])),
+        tuple(sorted(graph_parts["hourglass"])),
+    )
+
+
+def _compiled_side_prefilter(
+    graph_parts: Dict[str, Any],
+    compiled: CompiledPatternSide,
+    boundary_labels: Tuple[int, ...],
+) -> bool:
+    """Cheap necessary conditions only; this function never certifies a match."""
+    parts = compiled.parts
+    if len(parts["boundary"]) != len(boundary_labels):
+        return False
+    if any(label not in graph_parts["boundary_by_label"] for label in boundary_labels):
+        return False
+    _ensure_graph_indexes(graph_parts)
+    for color, count in compiled.internal_color_counts:
+        if len(graph_parts["internal_by_color"].get(color, set())) < count:
+            return False
+
+    boundary_mapping = {
+        pnode: graph_parts["boundary_by_label"][label]
+        for pnode, label in zip(parts["boundary"], boundary_labels)
+    }
+    for pnode in parts["internal"]:
+        color = str(parts["nodes"][pnode].get("color", ""))
+        candidates = set(graph_parts["internal_by_color"].get(color, set()))
+        for qnode, actual in boundary_mapping.items():
+            relation = _pattern_relation(parts, pnode, qnode)
+            if relation == "ordinary":
+                candidates &= graph_parts["ordinary_adj"].get(actual, set())
+            elif relation == "hourglass":
+                candidates &= graph_parts["hourglass_adj"].get(actual, set())
+            if not candidates:
+                return False
+    return True
+
+
+def _match_compiled_pattern_side(
+    graph_parts: Dict[str, Any],
+    compiled: CompiledPatternSide,
+    boundary_labels: Tuple[int, ...],
+    *,
+    max_matches: int = 1,
+) -> List[Dict[str, Any]]:
+    """Indexed equivalent of :func:`_match_pattern_side`."""
+    parts = compiled.parts
+    if not _compiled_side_prefilter(graph_parts, compiled, boundary_labels):
+        return []
+
+    mapping: Dict[str, int] = {
+        pnode: graph_parts["boundary_by_label"][label]
+        for pnode, label in zip(parts["boundary"], boundary_labels)
+    }
+    mapped_boundary_nodes = set(mapping.values())
+    internal_candidates: Dict[str, List[int]] = {}
+    for pnode in parts["internal"]:
+        wanted_color = str(parts["nodes"][pnode].get("color", ""))
+        candidates = set(graph_parts["internal_by_color"].get(wanted_color, set()))
+        candidates -= mapped_boundary_nodes
+        for qnode, actual in mapping.items():
+            relation = _pattern_relation(parts, pnode, qnode)
+            if relation == "ordinary":
+                candidates &= graph_parts["ordinary_adj"].get(actual, set())
+            elif relation == "hourglass":
+                candidates &= graph_parts["hourglass_adj"].get(actual, set())
+        if not candidates:
+            return []
+        internal_candidates[pnode] = sorted(candidates)
+
+    ordered_internal = sorted(
+        parts["internal"],
+        key=lambda node: (len(internal_candidates[node]), node),
+    )
+    matches: List[Dict[str, Any]] = []
+
+    def relation_ok(
+        pnode: str,
+        actual: int,
+        other_pnode: str,
+        other_actual: int,
+    ) -> bool:
+        expected = _pattern_relation(parts, pnode, other_pnode)
+        present = _actual_relation(graph_parts, actual, other_actual)
+        if expected is not None:
+            return present == expected
+        return present is None
+
+    def final_checks() -> bool:
+        mapped_nonports = set(mapping.values())
+        for pnode in parts["nonports"]:
+            actual = mapping[pnode]
+            local_ordinary = {
+                mapping[other]
+                for other in parts["nonports"]
+                if other != pnode
+                and _pattern_relation(parts, pnode, other) == "ordinary"
+            }
+            if (
+                graph_parts["ordinary_adj"].get(actual, set()) & mapped_nonports
+                != local_ordinary
+            ):
+                return False
+            local_hourglass = {
+                mapping[other]
+                for other in parts["nonports"]
+                if other != pnode
+                and _pattern_relation(parts, pnode, other) == "hourglass"
+            }
+            if (
+                graph_parts["hourglass_adj"].get(actual, set()) & mapped_nonports
+                != local_hourglass
+            ):
+                return False
+            outside_ordinary = (
+                graph_parts["ordinary_adj"].get(actual, set()) - mapped_nonports
+            )
+            if outside_ordinary & graph_parts["boundary_nodes"]:
+                return False
+            outside_hourglass = (
+                graph_parts["hourglass_adj"].get(actual, set()) - mapped_nonports
+            )
+            if outside_hourglass:
+                return False
+        return True
+
+    def backtrack(index: int, used: Set[int]) -> None:
+        if len(matches) >= max_matches:
+            return
+        if index == len(ordered_internal):
+            if final_checks():
+                matches.append(
+                    {
+                        "node_map": dict(mapping),
+                        "boundary_labels": list(boundary_labels),
+                        "ordinary_edges": sorted(
+                            {
+                                _pair(mapping[u], mapping[v])
+                                for u, v in parts["ordinary"]
+                            }
+                        ),
+                        "hourglass_edges": sorted(
+                            {
+                                _pair(mapping[u], mapping[v])
+                                for u, v in parts["hourglass"]
+                            }
+                        ),
+                    }
+                )
+            return
+
+        pnode = ordered_internal[index]
+        for actual in internal_candidates[pnode]:
+            if actual in used:
+                continue
+            if any(
+                not relation_ok(pnode, actual, other_pnode, other_actual)
+                for other_pnode, other_actual in mapping.items()
+            ):
+                continue
+            mapping[pnode] = actual
+            used.add(actual)
+            backtrack(index + 1, used)
+            used.remove(actual)
+            del mapping[pnode]
+
+    backtrack(0, set(mapped_boundary_nodes))
+    return matches
+
+
+class CompiledLemma49Matcher:
+    """Fixed-W Lemma 4.9 matcher with indexed, memoized X-side checks."""
+
+    def __init__(
+        self,
+        w_parts: Dict[str, Any],
+        *,
+        cache_size: int = 100_000,
+    ) -> None:
+        started = time.perf_counter()
+        self.w_parts = w_parts
+        _ensure_graph_indexes(self.w_parts)
+        self.stats = Lemma49MatcherStats()
+        self.cache_size = max(1, int(cache_size))
+        self.x_cache: OrderedDict[Tuple[Any, ...], Optional[Dict[str, Any]]] = (
+            OrderedDict()
+        )
+        self.slots: List[Lemma49ViableSlot] = []
+        boundary_count = len(w_parts["boundary_by_label"])
+
+        for pattern in compiled_sl4_lemma49_pattern_catalog():
+            matching = pattern.get("matching", {})
+            allow_reflection = bool(matching.get("allow_reflection", False))
+            allow_swap = bool(matching.get("allow_pair_swap", False))
+            allow_disk_rotation = bool(matching.get("allow_disk_rotation", True))
+            window_size = len(pattern["W"].get("boundary_order", []))
+            if window_size != len(pattern["X"].get("boundary_order", [])):
+                continue
+            for labels_list, reflected, start, disk_rotated in _boundary_windows(
+                boundary_count,
+                window_size,
+                allow_reflection=allow_reflection,
+                allow_disk_rotation=allow_disk_rotation,
+            ):
+                labels = tuple(labels_list)
+                assignments = [
+                    (
+                        False,
+                        pattern["_compiled_W"],
+                        pattern["_compiled_X"],
+                    )
+                ]
+                if allow_swap:
+                    assignments.append(
+                        (
+                            True,
+                            pattern["_compiled_X"],
+                            pattern["_compiled_W"],
+                        )
+                    )
+                for pair_swapped, w_pattern, x_pattern in assignments:
+                    self.stats.fixed_w_exact_checks += 1
+                    w_matches = _match_compiled_pattern_side(
+                        self.w_parts,
+                        w_pattern,
+                        labels,
+                        max_matches=1,
+                    )
+                    if not w_matches:
+                        continue
+                    self.slots.append(
+                        Lemma49ViableSlot(
+                            pattern=pattern,
+                            boundary_labels=labels,
+                            reflected=reflected,
+                            start=start,
+                            disk_rotated=disk_rotated,
+                            pair_swapped=pair_swapped,
+                            fixed_w_match=w_matches[0],
+                            x_pattern=x_pattern,
+                        )
+                    )
+        self.stats.viable_slots = len(self.slots)
+        self.stats.compile_seconds = time.perf_counter() - started
+
+    def match(
+        self,
+        x_parts: Dict[str, Any],
+        *,
+        x_key: Optional[Tuple[Any, ...]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        started = time.perf_counter()
+        self.stats.x_calls += 1
+        _ensure_graph_indexes(x_parts)
+        cache_key = x_key if x_key is not None else _graph_parts_key(x_parts)
+        if cache_key in self.x_cache:
+            self.stats.x_cache_hits += 1
+            result = self.x_cache.pop(cache_key)
+            self.x_cache[cache_key] = result
+            self.stats.x_seconds += time.perf_counter() - started
+            return result
+
+        result: Optional[Dict[str, Any]] = None
+        for slot in self.slots:
+            self.stats.x_slots_considered += 1
+            if not _compiled_side_prefilter(
+                x_parts, slot.x_pattern, slot.boundary_labels
+            ):
+                self.stats.x_fingerprint_rejects += 1
+                continue
+            self.stats.x_exact_checks += 1
+            x_matches = _match_compiled_pattern_side(
+                x_parts,
+                slot.x_pattern,
+                slot.boundary_labels,
+                max_matches=1,
+            )
+            if not x_matches:
+                continue
+            self.stats.x_exact_matches += 1
+            pattern = slot.pattern
+            result = {
+                "rule_id": pattern["id"],
+                "reason": pattern.get("conclusion", {}).get(
+                    "reason", pattern["id"]
+                ),
+                "source": pattern.get("source", {}),
+                "boundary_labels": list(slot.boundary_labels),
+                "reflected": slot.reflected,
+                "disk_rotation_start": slot.start,
+                "disk_rotated": slot.disk_rotated,
+                "pair_swapped": slot.pair_swapped,
+                "W": slot.fixed_w_match,
+                "X": x_matches[0],
+            }
+            break
+
+        self.x_cache[cache_key] = result
+        while len(self.x_cache) > self.cache_size:
+            self.x_cache.popitem(last=False)
+        self.stats.x_seconds += time.perf_counter() - started
+        return result
 
 
 def detect_sl4_lemma49_zero_pair(
