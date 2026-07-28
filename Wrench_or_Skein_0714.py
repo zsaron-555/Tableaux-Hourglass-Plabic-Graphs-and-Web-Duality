@@ -26,7 +26,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, MutableMapping, Optional, Set, Tuple
 
-import web_relation_rules_0714 as relation_rules
+import web_relation_rules_0714_2 as relation_rules
 
 
 Adjacency = Dict[int, Any]
@@ -803,18 +803,16 @@ def detect_figure43_moves(
     node_colors: Optional[NodeColors],
     node_xy: Optional[NodeXY],
 ) -> List[Dict[str, Any]]:
-    """Detect live Figure 43 rewrites that the engine knows how to apply.
+    """Detect executable Figure 43 rewrites in the current graph schema.
 
-    At present this applies the bottom row of the screenshot/Figure 43:
-    ordinary top and bottom sides, hourglass left and right sides, alternating
-    black-white-black-white vertices.  At q=1 the local relation used by this
-    computation is
+    At q=1 these are:
 
-        horizontal term + 2 * vertical term.
+      * one hourglass side: 2 times the collapsed hourglass;
+      * opposite hourglass sides: horizontal minus 2 times vertical.
 
-    The other Figure 43 rows are deliberately not guessed here; they should be
-    added as separate RHS constructors once their port-level rewrites are
-    specified.
+    The adjacent-one-hourglass row has a tagged lower-valence tensor on its
+    right-hand side.  It is catalogued in the relation metadata, but is not
+    executable until tagged lower-valence vertices are represented explicitly.
     """
     if not node_colors:
         return []
@@ -844,11 +842,10 @@ def detect_figure43_moves(
     for quad in candidates:
         if any(v not in node_colors for v in quad):
             continue
-        # Choose the local cycle from its edge types and vertex colors, never
-        # from screen coordinates.  The canonical order is
-        # black --ordinary-- white --hourglass-- black --ordinary-- white.
-        # Reversing or rotating this tuple leaves both RHS pairings unchanged.
-        valid_orders: List[Tuple[int, int, int, int]] = []
+        # Choose the local cycle from edge types and vertex colors, never from
+        # screen coordinates.  The first corner is black and the cycle colors
+        # alternate black-white-black-white.
+        valid_orders: List[Tuple[str, Tuple[int, int, int, int]]] = []
         for candidate in itertools.permutations(quad):
             sides = [
                 _edge_pair(candidate[0], candidate[1]),
@@ -860,16 +857,20 @@ def detect_figure43_moves(
                 continue
             side_types = tuple("hourglass" if side in hourglass_pairs else "ordinary" for side in sides)
             colors = tuple(node_colors.get(v, "") for v in candidate)
-            if side_types == ("ordinary", "hourglass", "ordinary", "hourglass") and colors == (
-                "black",
-                "white",
-                "black",
-                "white",
-            ):
-                valid_orders.append(tuple(int(v) for v in candidate))
+            if colors != ("black", "white", "black", "white"):
+                continue
+            if side_types == ("hourglass", "ordinary", "ordinary", "ordinary"):
+                valid_orders.append(
+                    ("GPPSS_F43_single_top_hourglass", tuple(int(v) for v in candidate))
+                )
+            elif side_types == ("ordinary", "hourglass", "ordinary", "hourglass"):
+                valid_orders.append(
+                    ("GPPSS_F43_left_right_hourglasses", tuple(int(v) for v in candidate))
+                )
         if not valid_orders:
             continue
-        ordered = list(min(valid_orders))
+        rule_name, ordered_tuple = min(valid_orders)
+        ordered = list(ordered_tuple)
         if _edge_pair(ordered[0], ordered[2]) in usable or _edge_pair(ordered[1], ordered[3]) in usable:
             continue
         sides = [
@@ -883,34 +884,54 @@ def detect_figure43_moves(
         ports = _figure43_external_ports(adj, *ordered)
         if ports is None:
             continue
-        rhs_terms = [
-            {
-                "smoothing": "horizontal",
-                "coefficient_multiplier": 1,
-                "tag_transport_multiplier": 1,
-            },
-            {
-                "smoothing": "vertical",
-                "coefficient_multiplier": 2,
-                "tag_transport_multiplier": 1,
-            },
-        ]
-        if not all(
-            _figure43_pairings_are_bipartite(
-                _figure43_pairings_from_ports(ports, str(rhs["smoothing"])),
-                ports,
-                node_colors,
-            )
-            for rhs in rhs_terms
-        ):
-            continue
+        if rule_name == "GPPSS_F43_single_top_hourglass":
+            # The retained white/black endpoints are bottom-left/bottom-right.
+            if not all(
+                _colors_are_opposite(node_colors.get(port), endpoint_color)
+                for port, endpoint_color in (
+                    (ports["top_left"], "white"),
+                    (ports["bottom_left"], "white"),
+                    (ports["top_right"], "black"),
+                    (ports["bottom_right"], "black"),
+                )
+            ):
+                continue
+            rhs_terms = [
+                {
+                    "smoothing": "collapse_to_hourglass",
+                    "coefficient_multiplier": 2,
+                    "tag_transport_multiplier": 1,
+                }
+            ]
+        else:
+            rhs_terms = [
+                {
+                    "smoothing": "horizontal",
+                    "coefficient_multiplier": 1,
+                    "tag_transport_multiplier": 1,
+                },
+                {
+                    "smoothing": "vertical",
+                    "coefficient_multiplier": -2,
+                    "tag_transport_multiplier": 1,
+                },
+            ]
+            if not all(
+                _figure43_pairings_are_bipartite(
+                    _figure43_pairings_from_ports(ports, str(rhs["smoothing"])),
+                    ports,
+                    node_colors,
+                )
+                for rhs in rhs_terms
+            ):
+                continue
         key = tuple(ordered)
         if key in seen:
             continue
         seen.add(key)
         matches.append(
             {
-                "rule": "GPPSS_F43_left_right_hourglasses",
+                "rule": rule_name,
                 "vertices_top_right_bottom_left": ordered,
                 "side_types_top_right_bottom_left": list(side_types),
                 "colors_top_right_bottom_left": list(colors),
@@ -930,6 +951,75 @@ def detect_figure43_moves(
             }
         )
     return matches
+
+
+def _figure43_collapsed_hourglass(
+    white: int,
+    black: int,
+    white_ports: Tuple[int, int],
+    black_ports: Tuple[int, int],
+) -> Hourglass:
+    return {
+        "white": int(white),
+        "black": int(black),
+        "left": int(black),
+        "right": int(white),
+        "left_top": int(black_ports[0]),
+        "left_bot": int(black_ports[1]),
+        "right_top": int(white_ports[0]),
+        "right_bot": int(white_ports[1]),
+        "white_port0": int(white_ports[0]),
+        "white_port1": int(white_ports[1]),
+        "black_port0": int(black_ports[0]),
+        "black_port1": int(black_ports[1]),
+        "left_endpoint": "black",
+        "local_case": "figure43_single_top_hourglass",
+    }
+
+
+def _collapse_figure43_single_top_hourglass(
+    adj: Adjacency,
+    remaining_hourglasses: List[Hourglass],
+    match: Dict[str, Any],
+) -> Tuple[Adjacency, List[Hourglass]]:
+    """Apply Figure 43 row 3 directly as two times one hourglass."""
+    tl, tr, br, bl = [int(v) for v in match["vertices_top_right_bottom_left"]]
+    new_adj = copy.deepcopy(adj)
+    ports = _figure43_external_ports(new_adj, tl, tr, br, bl)
+    if ports is None:
+        raise ValueError("Figure 43 single-hourglass collapse needs four external ports.")
+
+    replace_one_neighbor(ports["top_left"], tl, bl, new_adj)
+    replace_one_neighbor(ports["top_right"], tr, br, new_adj)
+    for vertex in (tl, tr):
+        if vertex in new_adj:
+            del new_adj[vertex]
+
+    white_ports = (int(ports["top_left"]), int(ports["bottom_left"]))
+    black_ports = (int(ports["top_right"]), int(ports["bottom_right"]))
+    slot_pattern = ("top", "strand:0", "strand:1", "bot")
+    new_adj[bl] = HourglassPorts(
+        {"top": white_ports[0], "bot": white_ports[1]},
+        slot_pattern=slot_pattern,
+    )
+    new_adj[br] = HourglassPorts(
+        {"top": black_ports[0], "bot": black_ports[1]},
+        slot_pattern=slot_pattern,
+    )
+    removed_pair = _edge_pair(tl, tr)
+    new_hgs = [
+        copy.deepcopy(hg)
+        for hg in remaining_hourglasses
+        if hourglass_key(hg) != removed_pair
+    ]
+    new_hgs.append(
+        _figure43_collapsed_hourglass(bl, br, white_ports, black_ports)
+    )
+    new_hgs.sort(key=hourglass_key)
+    new_adj = drop_nonreciprocal_references(new_adj)
+    new_hgs = clean_hourglasses_for_adj(new_adj, new_hgs)
+    validate_adjacency(new_adj)
+    return new_adj, new_hgs
 
 
 def _external_port_for_cycle_vertex(adj: Adjacency, vertex: int, cycle_neighbors: Iterable[int]) -> Optional[int]:
@@ -1014,6 +1104,14 @@ def apply_figure43_move(
     smoothing: str,
 ) -> Tuple[Adjacency, List[Hourglass]]:
     """Apply a supported Figure 43 local rewrite to one web state."""
+    if match.get("rule") == "GPPSS_F43_single_top_hourglass":
+        if smoothing != "collapse_to_hourglass":
+            raise ValueError("The single-hourglass Figure 43 row has one collapsed RHS.")
+        return _collapse_figure43_single_top_hourglass(
+            adj,
+            remaining_hourglasses,
+            match,
+        )
     if match.get("rule") != "GPPSS_F43_left_right_hourglasses":
         raise ValueError(f"Unsupported Figure 43 rule: {match.get('rule')}")
     if smoothing not in {"horizontal", "vertical"}:
@@ -2308,6 +2406,37 @@ def consolidate_pair_terms(terms: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [term for term in consolidated.values() if term["coeff"] != 0]
 
 
+def pair_state_key(state: Dict[str, Any]) -> Tuple[Any, ...]:
+    """Structural key for one algebraic active state.
+
+    Discharged terms already contribute zero, and relation histories are proof
+    witnesses rather than algebraic data.  Excluding both prevents a forward
+    reduction from being revisited merely under a different history.
+    """
+    return (
+        "pair-state-v1",
+        tuple(
+            sorted(
+                (int(term["coeff"]), pair_term_key(term))
+                for term in state.get("active", [])
+            )
+        ),
+    )
+
+
+def deduplicate_pair_states(states: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Keep one representative of every structurally identical active state."""
+    unique: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+    for state in states:
+        key = pair_state_key(state)
+        previous = unique.get(key)
+        if previous is None or tuple(state.get("score", ())) > tuple(
+            previous.get("score", ())
+        ):
+            unique[key] = state
+    return list(unique.values())
+
+
 def discharge_pair_terms_by_common_fork(
     terms: List[Dict[str, Any]],
     x_boundary_labels: BoundaryLabels,
@@ -2721,6 +2850,65 @@ def choose_pair_successors(
                 }
             )
             continue
+        relation_choices: List[Tuple[str, Dict[str, Any]]] = []
+        relation_choices.extend(
+            ("X", match)
+            for match in detect_figure43_moves(
+                term["x_adj"],
+                term["x_remaining"],
+                x_node_colors,
+                x_node_xy,
+            )
+        )
+        if allow_w_wrench:
+            relation_choices.extend(
+                ("W", match)
+                for match in detect_figure43_moves(
+                    term["w_adj"],
+                    term["w_remaining"],
+                    w_node_colors,
+                    w_node_xy,
+                )
+            )
+        relation_successor_count = len(successors)
+        for side, match in relation_choices:
+            try:
+                children = expand_pair_term_by_figure43(term, side, match)
+            except ValueError:
+                continue
+            next_terms = active[:term_idx] + active[term_idx + 1 :] + children
+            next_terms = consolidate_pair_terms(next_terms)
+            next_active, newly_discharged = discharge_pair_terms_by_common_fork(
+                next_terms,
+                x_boundary_labels,
+                w_boundary_labels,
+                allowed_forks,
+                x_node_colors,
+                w_node_colors,
+                use_lemma49=use_lemma49,
+                use_lemma48=use_lemma48,
+            )
+            next_discharged = discharged + newly_discharged
+            successors.append(
+                {
+                    "active": next_active,
+                    "discharged": next_discharged,
+                    "expanded_relation": "figure43",
+                    "expanded_side": side,
+                    "expanded_rule": match["rule"],
+                    "expanded_vertices": [int(v) for v in match["vertices_top_right_bottom_left"]],
+                    "score": score_pair_state(
+                        next_active,
+                        next_discharged,
+                        x_boundary_labels,
+                        w_boundary_labels,
+                        allowed_forks,
+                    ),
+                }
+            )
+        if len(successors) > relation_successor_count:
+            continue
+
         choices: List[Tuple[str, Hourglass]] = [("X", hg) for hg in term["x_remaining"]]
         if allow_w_wrench:
             choices.extend(("W", hg) for hg in term["w_remaining"])
@@ -2755,61 +2943,6 @@ def choose_pair_successors(
                     "expanded_relation": "wrench",
                     "expanded_side": side,
                     "expanded_hourglass": [int(hg["white"]), int(hg["black"])],
-                    "score": score_pair_state(
-                        next_active,
-                        next_discharged,
-                        x_boundary_labels,
-                        w_boundary_labels,
-                        allowed_forks,
-                    ),
-                }
-            )
-        relation_choices: List[Tuple[str, Dict[str, Any]]] = []
-        relation_choices.extend(
-            ("X", match)
-            for match in detect_figure43_moves(
-                term["x_adj"],
-                term["x_remaining"],
-                x_node_colors,
-                x_node_xy,
-            )
-        )
-        if allow_w_wrench:
-            relation_choices.extend(
-                ("W", match)
-                for match in detect_figure43_moves(
-                    term["w_adj"],
-                    term["w_remaining"],
-                    w_node_colors,
-                    w_node_xy,
-                )
-            )
-        for side, match in relation_choices:
-            try:
-                children = expand_pair_term_by_figure43(term, side, match)
-            except ValueError:
-                continue
-            next_terms = active[:term_idx] + active[term_idx + 1 :] + children
-            next_terms = consolidate_pair_terms(next_terms)
-            next_active, newly_discharged = discharge_pair_terms_by_common_fork(
-                next_terms,
-                x_boundary_labels,
-                w_boundary_labels,
-                allowed_forks,
-                x_node_colors,
-                w_node_colors,
-                use_lemma49=use_lemma49,
-                use_lemma48=use_lemma48,
-            )
-            next_discharged = discharged + newly_discharged
-            successors.append(
-                {
-                    "active": next_active,
-                    "discharged": next_discharged,
-                    "expanded_relation": "figure43",
-                    "expanded_side": side,
-                    "expanded_rule": match["rule"],
-                    "expanded_vertices": [int(v) for v in match["vertices_top_right_bottom_left"]],
                     "score": score_pair_state(
                         next_active,
                         next_discharged,
@@ -3677,6 +3810,49 @@ def choose_x_resolution_successors(
                         }
                     )
             continue
+        relation_successor_count = len(successors)
+        for match in detect_figure43_moves(
+            term["x_adj"],
+            term["x_remaining"],
+            x_node_colors,
+            x_node_xy,
+        ):
+            try:
+                children = expand_pair_term_by_figure43(term, "X", match)
+            except ValueError:
+                continue
+            next_terms = active[:term_idx] + active[term_idx + 1 :] + children
+            next_terms = consolidate_pair_terms(next_terms)
+            next_active, newly_discharged = discharge_pair_terms_by_common_fork(
+                next_terms,
+                x_boundary_labels,
+                w_boundary_labels,
+                allowed_forks,
+                x_node_colors,
+                w_node_colors,
+                use_lemma49=use_lemma49,
+                use_lemma48=use_lemma48,
+            )
+            next_discharged = discharged + newly_discharged
+            state = {
+                "active": next_active,
+                "discharged": next_discharged,
+                "expanded_relation": "figure43",
+                "expanded_side": "X",
+                "expanded_rule": match["rule"],
+                "expanded_vertices": [int(v) for v in match["vertices_top_right_bottom_left"]],
+                "score": score_pair_state(
+                    next_active,
+                    next_discharged,
+                    x_boundary_labels,
+                    w_boundary_labels,
+                    allowed_forks,
+                ),
+            }
+            successors.append(state)
+        if len(successors) > relation_successor_count:
+            continue
+
         for hg in term["x_remaining"]:
             try:
                 children = expand_pair_term(
@@ -3701,47 +3877,13 @@ def choose_x_resolution_successors(
                 use_lemma48=use_lemma48,
             )
             next_discharged = discharged + newly_discharged
-            state = {
-                "active": next_active,
-                "discharged": next_discharged,
-                "expanded_relation": "wrench",
-                "expanded_side": "X",
-                "expanded_hourglass": [int(hg["white"]), int(hg["black"])],
-                "score": score_pair_state(
-                    next_active,
-                    next_discharged,
-                    x_boundary_labels,
-                    w_boundary_labels,
-                    allowed_forks,
-                ),
-            }
-            successors.append(state)
-        for match in detect_figure43_moves(term["x_adj"], term["x_remaining"], x_node_colors, x_node_xy):
-            try:
-                children = expand_pair_term_by_figure43(term, "X", match)
-            except ValueError:
-                continue
-            next_terms = active[:term_idx] + active[term_idx + 1 :] + children
-            next_terms = consolidate_pair_terms(next_terms)
-            next_active, newly_discharged = discharge_pair_terms_by_common_fork(
-                next_terms,
-                x_boundary_labels,
-                w_boundary_labels,
-                allowed_forks,
-                x_node_colors,
-                w_node_colors,
-                use_lemma49=use_lemma49,
-                use_lemma48=use_lemma48,
-            )
-            next_discharged = discharged + newly_discharged
             successors.append(
                 {
                     "active": next_active,
                     "discharged": next_discharged,
-                    "expanded_relation": "figure43",
+                    "expanded_relation": "wrench",
                     "expanded_side": "X",
-                    "expanded_rule": match["rule"],
-                    "expanded_vertices": [int(v) for v in match["vertices_top_right_bottom_left"]],
+                    "expanded_hourglass": [int(hg["white"]), int(hg["black"])],
                     "score": score_pair_state(
                         next_active,
                         next_discharged,
@@ -4116,8 +4258,10 @@ def prove_pair_value_by_x_component_coloring(
             }
         )
 
-    # Phase 2: resolve X-hourglasses only.  Use the whole beam from phase 1, not
-    # just best_state, because a slightly worse guided state may color better.
+    # Phase 2: resolve X-hourglasses and internal black vertices only.  Keep a
+    # structural visited set so forward relations cannot cycle back to an
+    # algebraically identical state under a different proof history.
+    seen_x_resolution_states = {pair_state_key(state) for state in beam}
     for step in range(x_resolution_steps + 1):
         for state in beam:
             if not state["active"]:
@@ -4176,8 +4320,16 @@ def prove_pair_value_by_x_component_coloring(
             )
         if not candidates:
             break
+        candidates = deduplicate_pair_states(candidates)
+        candidates = [
+            state
+            for state in candidates
+            if pair_state_key(state) not in seen_x_resolution_states
+        ]
+        if not candidates:
+            break
 
-        def x_resolution_score(state: Dict[str, Any]) -> Tuple[int, int, int, int, int, int]:
+        def x_resolution_score(state: Dict[str, Any]) -> Tuple[int, int, int, int, int, int, int]:
             x_remaining = sum(len(t["x_remaining"]) for t in state["active"])
             x_black = sum(
                 len(term_x_internal_black_vertices(t, x_boundary_labels, x_node_colors))
@@ -4186,6 +4338,7 @@ def prove_pair_value_by_x_component_coloring(
             w_remaining = sum(len(t["w_remaining"]) for t in state["active"])
             return (
                 1 if x_remaining == 0 and x_black == 0 else 0,
+                -(x_remaining + x_black),
                 -x_remaining,
                 -x_black,
                 len(state["discharged"]),
@@ -4195,6 +4348,7 @@ def prove_pair_value_by_x_component_coloring(
 
         candidates.sort(key=x_resolution_score, reverse=True)
         beam = candidates[:x_beam_width]
+        seen_x_resolution_states.update(pair_state_key(state) for state in beam)
         if x_resolution_score(beam[0]) > x_resolution_score(best_state):
             best_state = beam[0]
         step_summaries.append(

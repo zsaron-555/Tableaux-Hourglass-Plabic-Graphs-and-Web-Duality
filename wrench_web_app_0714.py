@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import Wrench_or_Skein_0714 as wrench
-import web_relation_rules_0714 as relation_rules
+import web_relation_rules_0714_2 as relation_rules
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -1264,6 +1264,50 @@ def reconstruct_run(x_path: Path, w_path: Path, proof: Dict[str, Any]):
                     "continue_new_w": edge_set(current_w) - edge_set(before_w),
                     "deferred_untwist_count": int(continue_move.get("deferred_untwist_count", 0) or 0),
                     "deferred_untwist_multiplier": int(continue_move.get("deferred_untwist_multiplier", 1) or 1),
+                }
+            )
+            continue
+        if phase == "figure43" and continue_move.get("smoothing") == "collapse_to_hourglass":
+            before_x, before_w = current_x, current_w
+            before_xh, before_wh = current_xh, current_wh
+            current_x, current_xh, current_w, current_wh = wrench.replay_pair_history(
+                x_adj,
+                x_hgs,
+                w_adj,
+                w_hgs,
+                active_history[: idx + 1],
+            )
+            steps.append(
+                {
+                    "move": dict(continue_move),
+                    "side": side,
+                    "selected": tuple(int(v) for v in continue_move.get("vertices", [])),
+                    "current_x": before_x,
+                    "current_w": before_w,
+                    "current_xh": before_xh,
+                    "current_wh": before_wh,
+                    "killed": {
+                        "status": "deterministic_relation",
+                        "common_forks": [],
+                        "coeff": "",
+                    },
+                    "killed_smoothing": "no sibling branch",
+                    "sibling_smoothing": "no sibling branch",
+                    "continue_smoothing": continue_move.get("smoothing", ""),
+                    "killed_x": before_x,
+                    "killed_w": before_w,
+                    "killed_xh": before_xh,
+                    "killed_wh": before_wh,
+                    "killed_new_x": set(),
+                    "killed_new_w": set(),
+                    "continue_x": current_x,
+                    "continue_w": current_w,
+                    "continue_xh": current_xh,
+                    "continue_wh": current_wh,
+                    "continue_new_x": edge_set(current_x) - edge_set(before_x),
+                    "continue_new_w": edge_set(current_w) - edge_set(before_w),
+                    "deferred_untwist_count": 0,
+                    "deferred_untwist_multiplier": 1,
                 }
             )
             continue
