@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import Wrench_or_Skein_0714 as wrench
-import web_relation_rules_0714 as relation_rules
+import web_relation_rules_0714_2 as relation_rules
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -1183,6 +1183,50 @@ def reconstruct_run(x_path: Path, w_path: Path, proof: Dict[str, Any]):
     for idx, continue_move in enumerate(active_history):
         side = continue_move.get("side", "X")
         phase = continue_move.get("phase", "main_search")
+        if phase == "double_edge_skein":
+            before_x, before_w = current_x, current_w
+            before_xh, before_wh = current_xh, current_wh
+            current_x, current_xh, current_w, current_wh = wrench.replay_pair_history(
+                x_adj,
+                x_hgs,
+                w_adj,
+                w_hgs,
+                active_history[: idx + 1],
+            )
+            steps.append(
+                {
+                    "move": dict(continue_move),
+                    "side": side,
+                    "selected": tuple(int(v) for v in continue_move.get("vertices", [])),
+                    "current_x": before_x,
+                    "current_w": before_w,
+                    "current_xh": before_xh,
+                    "current_wh": before_wh,
+                    "killed": {
+                        "status": "deterministic_relation",
+                        "common_forks": [],
+                        "coeff": "",
+                    },
+                    "killed_smoothing": "no sibling branch",
+                    "sibling_smoothing": "no sibling branch",
+                    "continue_smoothing": continue_move.get("smoothing", ""),
+                    "killed_x": before_x,
+                    "killed_w": before_w,
+                    "killed_xh": before_xh,
+                    "killed_wh": before_wh,
+                    "killed_new_x": set(),
+                    "killed_new_w": set(),
+                    "continue_x": current_x,
+                    "continue_w": current_w,
+                    "continue_xh": current_xh,
+                    "continue_wh": current_wh,
+                    "continue_new_x": edge_set(current_x) - edge_set(before_x),
+                    "continue_new_w": edge_set(current_w) - edge_set(before_w),
+                    "deferred_untwist_count": 0,
+                    "deferred_untwist_multiplier": 1,
+                }
+            )
+            continue
         if phase == "antisymmetrizer":
             before_x, before_w = current_x, current_w
             before_xh, before_wh = current_xh, current_wh
@@ -1220,6 +1264,50 @@ def reconstruct_run(x_path: Path, w_path: Path, proof: Dict[str, Any]):
                     "continue_new_w": edge_set(current_w) - edge_set(before_w),
                     "deferred_untwist_count": int(continue_move.get("deferred_untwist_count", 0) or 0),
                     "deferred_untwist_multiplier": int(continue_move.get("deferred_untwist_multiplier", 1) or 1),
+                }
+            )
+            continue
+        if phase == "figure43" and continue_move.get("smoothing") == "collapse_to_hourglass":
+            before_x, before_w = current_x, current_w
+            before_xh, before_wh = current_xh, current_wh
+            current_x, current_xh, current_w, current_wh = wrench.replay_pair_history(
+                x_adj,
+                x_hgs,
+                w_adj,
+                w_hgs,
+                active_history[: idx + 1],
+            )
+            steps.append(
+                {
+                    "move": dict(continue_move),
+                    "side": side,
+                    "selected": tuple(int(v) for v in continue_move.get("vertices", [])),
+                    "current_x": before_x,
+                    "current_w": before_w,
+                    "current_xh": before_xh,
+                    "current_wh": before_wh,
+                    "killed": {
+                        "status": "deterministic_relation",
+                        "common_forks": [],
+                        "coeff": "",
+                    },
+                    "killed_smoothing": "no sibling branch",
+                    "sibling_smoothing": "no sibling branch",
+                    "continue_smoothing": continue_move.get("smoothing", ""),
+                    "killed_x": before_x,
+                    "killed_w": before_w,
+                    "killed_xh": before_xh,
+                    "killed_wh": before_wh,
+                    "killed_new_x": set(),
+                    "killed_new_w": set(),
+                    "continue_x": current_x,
+                    "continue_w": current_w,
+                    "continue_xh": current_xh,
+                    "continue_wh": current_wh,
+                    "continue_new_x": edge_set(current_x) - edge_set(before_x),
+                    "continue_new_w": edge_set(current_w) - edge_set(before_w),
+                    "deferred_untwist_count": 0,
+                    "deferred_untwist_multiplier": 1,
                 }
             )
             continue
@@ -1426,6 +1514,8 @@ def render_additional_branch_pictures(
 
 
 def phase_display_label(phase: str) -> str:
+    if phase == "double_edge_skein":
+        return "GPPSS double-edge reduction"
     if phase == "figure43":
         return "Figure 43"
     if phase == "antisymmetrizer":
@@ -1437,6 +1527,10 @@ def phase_display_label(phase: str) -> str:
 
 def move_piece_label(move: Dict[str, Any]) -> str:
     phase = str(move.get("phase", "main_search"))
+    if phase == "double_edge_skein":
+        if move.get("kind") == "hourglass_plus_edge":
+            return "hourglass plus ordinary edge"
+        return "two-edge lens"
     if phase == "figure43":
         return "Figure 43 piece"
     if phase == "antisymmetrizer":
@@ -1455,7 +1549,27 @@ def relation_before_highlights(
     helper ensures the main trace, branch pages, and lazy move pages all mark
     the same seven-edge local piece.
     """
-    if move.get("phase") != "antisymmetrizer" or str(move.get("side", "X")) != side:
+    phase = str(move.get("phase", "main_search"))
+    if str(move.get("side", "X")) != side:
+        return {}, {}
+
+    if phase == "double_edge_skein":
+        white = int(move["white"])
+        black = int(move["black"])
+        color = "#cf2f2f"
+        edges = {tuple(sorted((white, black))): color}
+        nodes = {white: color, black: color}
+        for field, endpoint in (
+            ("external_white", white),
+            ("external_black", black),
+        ):
+            if field in move:
+                external = int(move[field])
+                edges[tuple(sorted((endpoint, external)))] = color
+                nodes[external] = color
+        return edges, nodes
+
+    if phase != "antisymmetrizer":
         return {}, {}
 
     white = int(move["white"])
@@ -1634,6 +1748,11 @@ def branch_move_picture(
         return f'<p class="muted">Could not replay this move for display: {html.escape(str(exc))}</p>'
 
     is_figure43 = move.get("phase") == "figure43"
+    is_structural_relation = move.get("phase") in {
+        "figure43",
+        "antisymmetrizer",
+        "double_edge_skein",
+    }
     selected = tuple(sorted(int(x) for x in move.get("hourglass", [])))
     local_piece = move.get("vertices", list(selected))
     side = str(move.get("side", ""))
@@ -1667,8 +1786,8 @@ def branch_move_picture(
       <h4>Move {move_index}: {html.escape(phase_label)} applies {html.escape(side)} {move_piece_label(move)} {html.escape(str(local_piece))} as {html.escape(smoothing + untwist_note)}</h4>
       {render_pre_untwist_stage(move, x_graph, w_graph, before_x, before_xh, before_w, before_wh)}
       <div class="grid four">
-        {draw_web_svg('Before W', w_graph, before_w, before_wh, selected_hg=None if move.get("phase") in {"figure43", "antisymmetrizer"} else (selected if side == 'W' else None), highlight_edges=before_w_highlight_edges, node_ring_colors=before_w_highlight_nodes, edge_curves=before_w_curves, size=250)}
-        {draw_web_svg('Before X', x_graph, before_x, before_xh, selected_hg=None if move.get("phase") in {"figure43", "antisymmetrizer"} else (selected if side == 'X' else None), highlight_edges=before_x_highlight_edges, node_ring_colors=before_x_highlight_nodes, edge_curves=before_x_curves, size=250)}
+        {draw_web_svg('Before W', w_graph, before_w, before_wh, selected_hg=(selected if move.get("phase") == "double_edge_skein" and move.get("kind") == "hourglass_plus_edge" and side == 'W' else (None if is_structural_relation else (selected if side == 'W' else None))), highlight_edges=before_w_highlight_edges, node_ring_colors=before_w_highlight_nodes, edge_curves=before_w_curves, size=250)}
+        {draw_web_svg('Before X', x_graph, before_x, before_xh, selected_hg=(selected if move.get("phase") == "double_edge_skein" and move.get("kind") == "hourglass_plus_edge" and side == 'X' else (None if is_structural_relation else (selected if side == 'X' else None))), highlight_edges=before_x_highlight_edges, node_ring_colors=before_x_highlight_nodes, edge_curves=before_x_curves, size=250)}
         {draw_web_svg('After W', w_graph, after_w, after_wh, edge_colors={e: '#2586d8' for e in new_w}, edge_curves=after_w_curves, size=250)}
         {draw_web_svg('After X', x_graph, after_x, after_xh, edge_colors={e: '#2586d8' for e in new_x}, edge_curves=after_x_curves, size=250)}
       </div>
@@ -1775,6 +1894,11 @@ def branch_process_pictures(
             continue
 
         is_figure43 = move.get("phase") == "figure43"
+        is_structural_relation = move.get("phase") in {
+            "figure43",
+            "antisymmetrizer",
+            "double_edge_skein",
+        }
         selected = tuple(sorted(int(x) for x in move.get("hourglass", [])))
         local_piece = move.get("vertices", list(selected))
         side = str(move.get("side", ""))
@@ -1807,8 +1931,8 @@ def branch_process_pictures(
               <h4>Move {idx}: {html.escape(phase_label)} applies {html.escape(side)} {move_piece_label(move)} {html.escape(str(local_piece))} as {html.escape(smoothing + untwist_note)}</h4>
               {render_pre_untwist_stage(move, x_graph, w_graph, before_x, before_xh, before_w, before_wh)}
               <div class="grid four">
-                {draw_web_svg('Before W', w_graph, before_w, before_wh, selected_hg=None if move.get("phase") in {"figure43", "antisymmetrizer"} else (selected if side == 'W' else None), highlight_edges=before_w_highlight_edges, node_ring_colors=before_w_highlight_nodes, edge_curves=before_w_curves, size=250)}
-                {draw_web_svg('Before X', x_graph, before_x, before_xh, selected_hg=None if move.get("phase") in {"figure43", "antisymmetrizer"} else (selected if side == 'X' else None), highlight_edges=before_x_highlight_edges, node_ring_colors=before_x_highlight_nodes, edge_curves=before_x_curves, size=250)}
+                {draw_web_svg('Before W', w_graph, before_w, before_wh, selected_hg=(selected if move.get("phase") == "double_edge_skein" and move.get("kind") == "hourglass_plus_edge" and side == 'W' else (None if is_structural_relation else (selected if side == 'W' else None))), highlight_edges=before_w_highlight_edges, node_ring_colors=before_w_highlight_nodes, edge_curves=before_w_curves, size=250)}
+                {draw_web_svg('Before X', x_graph, before_x, before_xh, selected_hg=(selected if move.get("phase") == "double_edge_skein" and move.get("kind") == "hourglass_plus_edge" and side == 'X' else (None if is_structural_relation else (selected if side == 'X' else None))), highlight_edges=before_x_highlight_edges, node_ring_colors=before_x_highlight_nodes, edge_curves=before_x_curves, size=250)}
                 {draw_web_svg('After W', w_graph, after_w, after_wh, edge_colors={e: '#2586d8' for e in new_w}, edge_curves=after_w_curves, size=250)}
                 {draw_web_svg('After X', x_graph, after_x, after_xh, edge_colors={e: '#2586d8' for e in new_x}, edge_curves=after_x_curves, size=250)}
               </div>
@@ -2509,6 +2633,18 @@ def run_pair(params: Dict[str, str]) -> str:
                 killed_branch_text = f"{html.escape(step['killed_smoothing'])} branch remains active"
                 continue_title = "Displayed continuing branch"
                 continue_note = "this is the branch followed in the trace"
+            elif sibling_status == "deterministic_relation":
+                killed_title = "No sibling branch"
+                killed_note = (
+                    "This GPPSS reduction is a scalar identity, so it produces "
+                    "one continuing term rather than two skein branches."
+                )
+                killed_branch_text = "no sibling branch is created"
+                continue_title = "Reduced term"
+                continue_note = (
+                    f"the coefficient is multiplied by "
+                    f"{int(step.get('move', {}).get('coefficient_multiplier', 1))}"
+                )
             else:
                 killed_title = "Other branch not found in displayed path"
                 killed_note = "This is not a fork-lemma kill; the full search/correction pipeline must continue or evaluate it."
@@ -2523,6 +2659,11 @@ def run_pair(params: Dict[str, str]) -> str:
                 step_action = (
                     f"apply {step['side']} white-black antisymmetrizer "
                     f"to vertices {list(selected)}"
+                )
+            elif step_move.get("phase") == "double_edge_skein":
+                step_action = (
+                    f"apply {step['side']} {move_piece_label(step_move)} reduction "
+                    f"at vertices {list(selected)}"
                 )
             else:
                 step_action = f"expand {step['side']} hourglass {list(selected)}"
@@ -2569,8 +2710,8 @@ def run_pair(params: Dict[str, str]) -> str:
                     <div class="muted">{html.escape(step['continue_smoothing'])} branch continues; {killed_branch_text}</div>
                   </div>
                   <div class="grid four">
-                    {draw_web_svg('Current W', w_graph, step['current_w'], step['current_wh'], selected_hg=selected if step['side']=='W' and step_move.get('phase') != 'antisymmetrizer' else None, highlight_edges=current_w_highlight_edges, node_ring_colors=current_w_highlight_nodes)}
-                    {draw_web_svg('Current X', x_graph, step['current_x'], step['current_xh'], selected_hg=selected if step['side']=='X' and step_move.get('phase') != 'antisymmetrizer' else None, highlight_edges=current_x_highlight_edges, node_ring_colors=current_x_highlight_nodes)}
+                    {draw_web_svg('Current W', w_graph, step['current_w'], step['current_wh'], selected_hg=selected if step['side']=='W' and (step_move.get('phase') not in {'antisymmetrizer', 'double_edge_skein'} or step_move.get('kind') == 'hourglass_plus_edge') else None, highlight_edges=current_w_highlight_edges, node_ring_colors=current_w_highlight_nodes)}
+                    {draw_web_svg('Current X', x_graph, step['current_x'], step['current_xh'], selected_hg=selected if step['side']=='X' and (step_move.get('phase') not in {'antisymmetrizer', 'double_edge_skein'} or step_move.get('kind') == 'hourglass_plus_edge') else None, highlight_edges=current_x_highlight_edges, node_ring_colors=current_x_highlight_nodes)}
                     <div class="pair-card">
                       <div class="pair-title">{killed_title}</div>
                       <div class="pair-note">{killed_note}</div>
