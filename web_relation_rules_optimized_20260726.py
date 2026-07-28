@@ -304,7 +304,7 @@ def load_sl4_lemma49_zero_patterns(
 
 
 def sl4_lemma49_zero_rule_catalog() -> List[Dict[str, Any]]:
-    """Return the seven paired SL4 Lemma 4.9 analogue rules."""
+    """Return the paired SL4 Lemma 4.9 analogue and generalized zero rules."""
     return load_sl4_lemma49_zero_patterns()["patterns"]
 
 
@@ -314,10 +314,10 @@ def load_sl4_lemma48_zero_patterns(
 ) -> Dict[str, Any]:
     """Load metadata for the GL4 specialization of the Lemma 4.8 zero rule.
 
-    Unlike the Lemma 4.9 snippets, this rule has a variable-length boundary
-    interval.  The JSON files therefore record the theorem-shaped local
-    situation and detector parameters, while the actual matching is carried
-    out programmatically by :func:`detect_sl4_lemma48_zero_pair`.
+    The corrected rule has an exact five-boundary local model.  Its JSON file
+    records the required W/X incidences and orientation orbit, while matching
+    is carried out programmatically by
+    :func:`detect_sl4_lemma48_zero_pair`.
     """
     root = Path(pattern_dir)
     with (root / "manifest.json").open("r", encoding="utf-8") as handle:
@@ -465,6 +465,8 @@ def _pattern_web_parts(pattern_web: Dict[str, Any]) -> Dict[str, Any]:
     ]
     ordinary: Set[Tuple[str, str]] = set()
     hourglass: Set[Tuple[str, str]] = set()
+    allowed_relations: Dict[Tuple[str, str], Set[str]] = {}
+    edge_pairs_by_id: Dict[str, Tuple[str, str]] = {}
     port_counts = {node_id: 0 for node_id in nonports}
     for edge in pattern_web.get("edges", []):
         u, v = str(edge["u"]), str(edge["v"])
@@ -474,10 +476,16 @@ def _pattern_web_parts(pattern_web: Dict[str, Any]) -> Dict[str, Any]:
                 port_counts[local] += 1
             continue
         key = tuple(sorted((u, v)))
-        if edge.get("kind") == "hourglass":
+        edge_pairs_by_id[str(edge["id"])] = key
+        kind = str(edge.get("kind", "ordinary"))
+        if kind == "ordinary_or_hourglass":
+            allowed_relations[key] = {"ordinary", "hourglass"}
+        elif kind == "hourglass":
             hourglass.add(key)
+            allowed_relations[key] = {"hourglass"}
         else:
             ordinary.add(key)
+            allowed_relations[key] = {"ordinary"}
     return {
         "nodes": nodes,
         "ports": ports,
@@ -486,6 +494,9 @@ def _pattern_web_parts(pattern_web: Dict[str, Any]) -> Dict[str, Any]:
         "internal": internal,
         "ordinary": ordinary,
         "hourglass": hourglass,
+        "allowed_relations": allowed_relations,
+        "edge_pairs_by_id": edge_pairs_by_id,
+        "constraints": list(pattern_web.get("constraints", [])),
         "port_counts": port_counts,
     }
 
@@ -524,6 +535,69 @@ def _boundary_windows(
             yield labels, reflected, start, (start != 1 or reflected)
 
 
+def _pattern_boundary_windows(
+    pattern: Dict[str, Any],
+    boundary_count: int,
+) -> Iterable[Tuple[List[int], bool, int, bool]]:
+    """Enumerate fixed or shared variable-span boundary placements.
+
+    ``boundary_offsets`` lets a paired pattern retain a variable cyclic gap.
+    Offsets are zero-based within a span; negative offsets count backward from
+    the span's end.  The same resolved labels are used on W and X, which is the
+    "both gaps have the same size" condition in Additional Zero Pairings.
+    """
+    matching = pattern.get("matching", {})
+    allow_reflection = bool(matching.get("allow_reflection", False))
+    allow_disk_rotation = bool(matching.get("allow_disk_rotation", True))
+    offsets = matching.get("boundary_offsets")
+    if offsets is None:
+        yield from _boundary_windows(
+            boundary_count,
+            len(pattern["W"].get("boundary_order", [])),
+            allow_reflection=allow_reflection,
+            allow_disk_rotation=allow_disk_rotation,
+        )
+        return
+
+    offsets = [int(offset) for offset in offsets]
+    expected = len(pattern["W"].get("boundary_order", []))
+    if len(offsets) != expected:
+        return
+    minimum_span = max(
+        int(matching.get("minimum_boundary_span", expected)),
+        1 + max((offset for offset in offsets if offset >= 0), default=-1),
+        max((-offset for offset in offsets if offset < 0), default=0),
+    )
+    maximum_span = min(
+        int(matching.get("maximum_boundary_span", boundary_count)),
+        boundary_count,
+    )
+    orientations = [False] + ([True] if allow_reflection else [])
+    starts = range(1, boundary_count + 1) if allow_disk_rotation else range(1, 2)
+    seen: Set[Tuple[int, ...]] = set()
+    for span in range(minimum_span, maximum_span + 1):
+        resolved_offsets = [
+            offset if offset >= 0 else span + offset
+            for offset in offsets
+        ]
+        if len(set(resolved_offsets)) != len(resolved_offsets):
+            continue
+        if any(offset < 0 or offset >= span for offset in resolved_offsets):
+            continue
+        for reflected in orientations:
+            step = -1 if reflected else 1
+            for start in starts:
+                labels = [
+                    ((start - 1 + step * offset) % boundary_count) + 1
+                    for offset in resolved_offsets
+                ]
+                key = tuple(labels)
+                if key in seen:
+                    continue
+                seen.add(key)
+                yield labels, reflected, start, (start != 1 or reflected)
+
+
 def _pattern_relation(parts: Dict[str, Any], u: str, v: str) -> Optional[str]:
     key = tuple(sorted((str(u), str(v))))
     if key in parts["hourglass"]:
@@ -531,6 +605,37 @@ def _pattern_relation(parts: Dict[str, Any], u: str, v: str) -> Optional[str]:
     if key in parts["ordinary"]:
         return "ordinary"
     return None
+
+
+def _pattern_allowed_relations(
+    parts: Dict[str, Any],
+    u: str,
+    v: str,
+) -> Set[str]:
+    return set(parts["allowed_relations"].get(tuple(sorted((str(u), str(v)))), set()))
+
+
+def _pattern_constraints_ok(
+    parts: Dict[str, Any],
+    mapping: Dict[str, int],
+    graph_parts: Dict[str, Any],
+) -> bool:
+    for constraint in parts.get("constraints", []):
+        if constraint.get("type") != "exact_edge_kind_count":
+            continue
+        wanted_kind = str(constraint["kind"])
+        wanted_count = int(constraint["count"])
+        actual_count = 0
+        for edge_id in constraint.get("edge_ids", []):
+            pair = parts["edge_pairs_by_id"].get(str(edge_id))
+            if pair is None:
+                return False
+            u, v = pair
+            if _actual_relation(graph_parts, mapping[u], mapping[v]) == wanted_kind:
+                actual_count += 1
+        if actual_count != wanted_count:
+            return False
+    return True
 
 
 def _actual_relation(parts: Dict[str, Any], u: int, v: int) -> Optional[str]:
@@ -572,11 +677,13 @@ def _match_pattern_side(
             and node_id not in mapped_boundary_nodes
         ]
         for qnode, actual in mapping.items():
-            relation = _pattern_relation(parts, pnode, qnode)
-            if relation == "ordinary":
-                candidates = [node for node in candidates if _pair(node, actual) in graph_parts["ordinary"]]
-            elif relation == "hourglass":
-                candidates = [node for node in candidates if _pair(node, actual) in graph_parts["hourglass"]]
+            allowed = _pattern_allowed_relations(parts, pnode, qnode)
+            if allowed:
+                candidates = [
+                    node
+                    for node in candidates
+                    if _actual_relation(graph_parts, node, actual) in allowed
+                ]
         internal_candidates[pnode] = candidates
         if not candidates:
             return []
@@ -585,31 +692,27 @@ def _match_pattern_side(
     matches: List[Dict[str, Any]] = []
 
     def relation_ok(pnode: str, actual: int, other_pnode: str, other_actual: int) -> bool:
-        expected = _pattern_relation(parts, pnode, other_pnode)
+        expected = _pattern_allowed_relations(parts, pnode, other_pnode)
         present = _actual_relation(graph_parts, actual, other_actual)
-        if expected is not None:
-            return present == expected
+        if expected:
+            return present in expected
         return present is None
 
     def final_checks() -> bool:
         mapped_nonports = set(mapping.values())
         for pnode in parts["nonports"]:
             actual = mapping[pnode]
-            local_ordinary = {
+            local_neighbors = {
                 mapping[other]
                 for other in parts["nonports"]
-                if other != pnode and _pattern_relation(parts, pnode, other) == "ordinary"
+                if other != pnode
+                and _pattern_allowed_relations(parts, pnode, other)
             }
-            actual_local_ordinary = graph_parts["ordinary_adj"].get(actual, set()) & mapped_nonports
-            if actual_local_ordinary != local_ordinary:
-                return False
-            local_hourglass = {
-                mapping[other]
-                for other in parts["nonports"]
-                if other != pnode and _pattern_relation(parts, pnode, other) == "hourglass"
-            }
-            actual_local_hourglass = graph_parts["hourglass_adj"].get(actual, set()) & mapped_nonports
-            if actual_local_hourglass != local_hourglass:
+            actual_local_neighbors = (
+                graph_parts["ordinary_adj"].get(actual, set())
+                | graph_parts["hourglass_adj"].get(actual, set())
+            ) & mapped_nonports
+            if actual_local_neighbors != local_neighbors:
                 return False
             outside_ordinary = graph_parts["ordinary_adj"].get(actual, set()) - mapped_nonports
             if outside_ordinary & graph_parts["boundary_nodes"]:
@@ -617,7 +720,7 @@ def _match_pattern_side(
             outside_hourglass = graph_parts["hourglass_adj"].get(actual, set()) - mapped_nonports
             if outside_hourglass:
                 return False
-        return True
+        return _pattern_constraints_ok(parts, mapping, graph_parts)
 
     def backtrack(index: int, used: Set[int]) -> None:
         if len(matches) >= max_matches:
@@ -626,11 +729,13 @@ def _match_pattern_side(
             if final_checks():
                 ordinary_edges = [
                     _pair(mapping[u], mapping[v])
-                    for u, v in parts["ordinary"]
+                    for u, v in parts["allowed_relations"]
+                    if _actual_relation(graph_parts, mapping[u], mapping[v]) == "ordinary"
                 ]
                 hourglass_edges = [
                     _pair(mapping[u], mapping[v])
-                    for u, v in parts["hourglass"]
+                    for u, v in parts["allowed_relations"]
+                    if _actual_relation(graph_parts, mapping[u], mapping[v]) == "hourglass"
                 ]
                 matches.append(
                     {
@@ -762,11 +867,14 @@ def _compiled_side_prefilter(
         color = str(parts["nodes"][pnode].get("color", ""))
         candidates = set(graph_parts["internal_by_color"].get(color, set()))
         for qnode, actual in boundary_mapping.items():
-            relation = _pattern_relation(parts, pnode, qnode)
-            if relation == "ordinary":
-                candidates &= graph_parts["ordinary_adj"].get(actual, set())
-            elif relation == "hourglass":
-                candidates &= graph_parts["hourglass_adj"].get(actual, set())
+            allowed = _pattern_allowed_relations(parts, pnode, qnode)
+            if allowed:
+                permitted = set()
+                if "ordinary" in allowed:
+                    permitted |= graph_parts["ordinary_adj"].get(actual, set())
+                if "hourglass" in allowed:
+                    permitted |= graph_parts["hourglass_adj"].get(actual, set())
+                candidates &= permitted
             if not candidates:
                 return False
     return True
@@ -795,11 +903,14 @@ def _match_compiled_pattern_side(
         candidates = set(graph_parts["internal_by_color"].get(wanted_color, set()))
         candidates -= mapped_boundary_nodes
         for qnode, actual in mapping.items():
-            relation = _pattern_relation(parts, pnode, qnode)
-            if relation == "ordinary":
-                candidates &= graph_parts["ordinary_adj"].get(actual, set())
-            elif relation == "hourglass":
-                candidates &= graph_parts["hourglass_adj"].get(actual, set())
+            allowed = _pattern_allowed_relations(parts, pnode, qnode)
+            if allowed:
+                permitted = set()
+                if "ordinary" in allowed:
+                    permitted |= graph_parts["ordinary_adj"].get(actual, set())
+                if "hourglass" in allowed:
+                    permitted |= graph_parts["hourglass_adj"].get(actual, set())
+                candidates &= permitted
         if not candidates:
             return []
         internal_candidates[pnode] = sorted(candidates)
@@ -816,37 +927,27 @@ def _match_compiled_pattern_side(
         other_pnode: str,
         other_actual: int,
     ) -> bool:
-        expected = _pattern_relation(parts, pnode, other_pnode)
+        expected = _pattern_allowed_relations(parts, pnode, other_pnode)
         present = _actual_relation(graph_parts, actual, other_actual)
-        if expected is not None:
-            return present == expected
+        if expected:
+            return present in expected
         return present is None
 
     def final_checks() -> bool:
         mapped_nonports = set(mapping.values())
         for pnode in parts["nonports"]:
             actual = mapping[pnode]
-            local_ordinary = {
+            local_neighbors = {
                 mapping[other]
                 for other in parts["nonports"]
                 if other != pnode
-                and _pattern_relation(parts, pnode, other) == "ordinary"
+                and _pattern_allowed_relations(parts, pnode, other)
             }
-            if (
-                graph_parts["ordinary_adj"].get(actual, set()) & mapped_nonports
-                != local_ordinary
-            ):
-                return False
-            local_hourglass = {
-                mapping[other]
-                for other in parts["nonports"]
-                if other != pnode
-                and _pattern_relation(parts, pnode, other) == "hourglass"
-            }
-            if (
-                graph_parts["hourglass_adj"].get(actual, set()) & mapped_nonports
-                != local_hourglass
-            ):
+            actual_local_neighbors = (
+                graph_parts["ordinary_adj"].get(actual, set())
+                | graph_parts["hourglass_adj"].get(actual, set())
+            ) & mapped_nonports
+            if actual_local_neighbors != local_neighbors:
                 return False
             outside_ordinary = (
                 graph_parts["ordinary_adj"].get(actual, set()) - mapped_nonports
@@ -858,7 +959,7 @@ def _match_compiled_pattern_side(
             )
             if outside_hourglass:
                 return False
-        return True
+        return _pattern_constraints_ok(parts, mapping, graph_parts)
 
     def backtrack(index: int, used: Set[int]) -> None:
         if len(matches) >= max_matches:
@@ -872,13 +973,19 @@ def _match_compiled_pattern_side(
                         "ordinary_edges": sorted(
                             {
                                 _pair(mapping[u], mapping[v])
-                                for u, v in parts["ordinary"]
+                                for u, v in parts["allowed_relations"]
+                                if _actual_relation(
+                                    graph_parts, mapping[u], mapping[v]
+                                ) == "ordinary"
                             }
                         ),
                         "hourglass_edges": sorted(
                             {
                                 _pair(mapping[u], mapping[v])
-                                for u, v in parts["hourglass"]
+                                for u, v in parts["allowed_relations"]
+                                if _actual_relation(
+                                    graph_parts, mapping[u], mapping[v]
+                                ) == "hourglass"
                             }
                         ),
                     }
@@ -929,14 +1036,12 @@ class CompiledLemma49Matcher:
             allow_reflection = bool(matching.get("allow_reflection", False))
             allow_swap = bool(matching.get("allow_pair_swap", False))
             allow_disk_rotation = bool(matching.get("allow_disk_rotation", True))
-            window_size = len(pattern["W"].get("boundary_order", []))
-            if window_size != len(pattern["X"].get("boundary_order", [])):
+            if len(pattern["W"].get("boundary_order", [])) != len(
+                pattern["X"].get("boundary_order", [])
+            ):
                 continue
-            for labels_list, reflected, start, disk_rotated in _boundary_windows(
-                boundary_count,
-                window_size,
-                allow_reflection=allow_reflection,
-                allow_disk_rotation=allow_disk_rotation,
+            for labels_list, reflected, start, disk_rotated in _pattern_boundary_windows(
+                pattern, boundary_count
             ):
                 labels = tuple(labels_list)
                 assignments = [
@@ -1071,15 +1176,13 @@ def detect_sl4_lemma49_zero_pair(
         assignments = [("W", "X", pattern["W"], pattern["X"])]
         if allow_swap:
             assignments.append(("X", "W", pattern["W"], pattern["X"]))
-        window_size = len(pattern["W"].get("boundary_order", []))
-        if window_size != len(pattern["X"].get("boundary_order", [])):
+        if len(pattern["W"].get("boundary_order", [])) != len(
+            pattern["X"].get("boundary_order", [])
+        ):
             continue
 
-        for labels, reflected, start, disk_rotated in _boundary_windows(
-            boundary_count,
-            window_size,
-            allow_reflection=allow_reflection,
-            allow_disk_rotation=allow_disk_rotation,
+        for labels, reflected, start, disk_rotated in _pattern_boundary_windows(
+            pattern, boundary_count
         ):
             for pattern_w_side, pattern_x_side, pattern_w, pattern_x in assignments:
                 actual_w_parts = w_parts if pattern_w_side == "W" else x_parts
@@ -1170,22 +1273,13 @@ def detect_sl4_lemma48_zero_pair(
     *,
     max_matches: int = 1,
 ) -> List[Dict[str, Any]]:
-    """Detect the GL4 specialization of the generalized Lemma 4.8 zero rule.
+    """Detect the corrected five-boundary GL4 Lemma 4.8 zero pattern.
 
-    This is a conservative, graph-data-level detector for the picture in
-    ``Lemma4.8_SL4.pdf``.  On a cyclic boundary interval
-    ``v1, ..., v_a, v_{a+1}, v_{a+2}``, it requires:
-
-    * in W, the two terminal labels ``v_{a+1}, v_{a+2}`` attach to the same
-      internal white vertex;
-    * in W, a visible white fan attaches to at least two middle boundary
-      labels from ``v2, ..., v_a``;
-    * in X, ``v1, v_{a+1}, v_{a+2}`` lie in the same underlying connected
-      component, where hourglass pairs are treated as connections.
-
-    Those conditions are exactly the coloring contradiction used in the GL4
-    specialization: X forces the terminal boundary colors to agree, while W
-    asks two edges at the same white vertex to carry the same color.
+    The local W and X incidences are matched exactly as drawn in
+    ``IMG_5961.heic``.  Only incidences outside the displayed local subgraphs
+    are unrestricted.  Every cyclic starting label and both cyclic
+    orientations are tested, which realizes all disk rotations and
+    reflections.
     """
     w_parts = _actual_graph_parts(w_graph)
     x_parts = _actual_graph_parts(x_graph)
@@ -1193,12 +1287,125 @@ def detect_sl4_lemma48_zero_pair(
     if boundary_count == 0 or boundary_count != _boundary_label_count(x_parts):
         return []
 
+    def ordinary_white_neighbors(
+        parts: Dict[str, Any],
+        boundary_labels: Iterable[int],
+    ) -> Set[int]:
+        common: Optional[Set[int]] = None
+        for label in boundary_labels:
+            boundary_node = parts["boundary_by_label"].get(int(label))
+            if boundary_node is None:
+                return set()
+            candidates = {
+                nbr
+                for nbr in parts["ordinary_adj"].get(boundary_node, set())
+                if nbr not in parts["boundary_nodes"]
+                and parts["colors"].get(nbr) == "white"
+            }
+            common = candidates if common is None else common & candidates
+        return common or set()
+
+    def w_local_matches(parts: Dict[str, Any], labels: List[int]) -> List[Dict[str, Any]]:
+        v1, v2, v3, v4, v5 = labels
+        boundary = parts["boundary_by_label"]
+        matches: List[Dict[str, Any]] = []
+        for w_left in sorted(ordinary_white_neighbors(parts, [v1])):
+            for w_fan in sorted(ordinary_white_neighbors(parts, [v2, v3, v4])):
+                for w_right in sorted(ordinary_white_neighbors(parts, [v5])):
+                    if len({w_left, w_fan, w_right}) != 3:
+                        continue
+                    for b_hub, color in sorted(parts["colors"].items()):
+                        if color != "black" or b_hub in parts["boundary_nodes"]:
+                            continue
+                        ordinary_required = {
+                            _pair(w_left, boundary[v1]),
+                            _pair(b_hub, w_left),
+                            _pair(w_fan, boundary[v2]),
+                            _pair(w_fan, boundary[v3]),
+                            _pair(w_fan, boundary[v4]),
+                            _pair(b_hub, w_fan),
+                            _pair(w_right, boundary[v5]),
+                        }
+                        hourglass_required = {_pair(b_hub, w_right)}
+                        if not ordinary_required <= parts["ordinary"]:
+                            continue
+                        if not hourglass_required <= parts["hourglass"]:
+                            continue
+                        matches.append(
+                            {
+                                "node_map": {
+                                    "w_left": int(w_left),
+                                    "w_fan": int(w_fan),
+                                    "w_right": int(w_right),
+                                    "b_hub": int(b_hub),
+                                },
+                                "boundary_labels": list(labels),
+                                "ordinary_edges": sorted(ordinary_required),
+                                "hourglass_edges": sorted(hourglass_required),
+                            }
+                        )
+        return matches
+
+    def x_local_matches(parts: Dict[str, Any], labels: List[int]) -> List[Dict[str, Any]]:
+        v1, v2, v3, v4, v5 = labels
+        boundary = parts["boundary_by_label"]
+        matches: List[Dict[str, Any]] = []
+        for xw1 in sorted(ordinary_white_neighbors(parts, [v1, v2])):
+            for xw2 in sorted(ordinary_white_neighbors(parts, [v3])):
+                for xw3 in sorted(ordinary_white_neighbors(parts, [v4, v5])):
+                    if len({xw1, xw2, xw3}) != 3:
+                        continue
+                    for xb1, color1 in sorted(parts["colors"].items()):
+                        if color1 != "black" or xb1 in parts["boundary_nodes"]:
+                            continue
+                        if _pair(xw1, xb1) not in parts["hourglass"]:
+                            continue
+                        if _pair(xb1, xw2) not in parts["ordinary"]:
+                            continue
+                        for xb2, color2 in sorted(parts["colors"].items()):
+                            if (
+                                color2 != "black"
+                                or xb2 in parts["boundary_nodes"]
+                                or xb2 == xb1
+                            ):
+                                continue
+                            ordinary_required = {
+                                _pair(xw1, boundary[v1]),
+                                _pair(xw1, boundary[v2]),
+                                _pair(xb1, xw2),
+                                _pair(xw2, boundary[v3]),
+                                _pair(xb2, xw3),
+                                _pair(xw3, boundary[v4]),
+                                _pair(xw3, boundary[v5]),
+                            }
+                            hourglass_required = {
+                                _pair(xw1, xb1),
+                                _pair(xw2, xb2),
+                            }
+                            if not ordinary_required <= parts["ordinary"]:
+                                continue
+                            if not hourglass_required <= parts["hourglass"]:
+                                continue
+                            matches.append(
+                                {
+                                    "node_map": {
+                                        "xw1": int(xw1),
+                                        "xb1": int(xb1),
+                                        "xw2": int(xw2),
+                                        "xb2": int(xb2),
+                                        "xw3": int(xw3),
+                                    },
+                                    "boundary_labels": list(labels),
+                                    "ordinary_edges": sorted(ordinary_required),
+                                    "hourglass_edges": sorted(hourglass_required),
+                                }
+                            )
+        return matches
+
     found: List[Dict[str, Any]] = []
     for pattern in sl4_lemma48_zero_rule_catalog():
         matching = pattern.get("matching", {})
-        min_window = int(matching.get("min_boundary_window", 5))
-        max_window = int(matching.get("max_boundary_window", boundary_count))
-        min_fan_spokes = int(matching.get("min_middle_fan_spokes", 2))
+        window_size = int(matching.get("boundary_window_size", 5))
         allow_reflection = bool(matching.get("allow_reflection", True))
         allow_swap = bool(matching.get("allow_pair_swap", False))
         allow_disk_rotation = bool(matching.get("allow_disk_rotation", True))
@@ -1206,106 +1413,43 @@ def detect_sl4_lemma48_zero_pair(
         if allow_swap:
             assignments.append(("X", "W"))
 
-        for window_size in range(min_window, min(max_window, boundary_count) + 1):
-            for labels, reflected, start, disk_rotated in _boundary_windows(
-                boundary_count,
-                window_size,
-                allow_reflection=allow_reflection,
-                allow_disk_rotation=allow_disk_rotation,
-            ):
-                left_label = labels[0]
-                terminal_labels = labels[-2:]
-                middle_labels = labels[1:-2]
-                if len(middle_labels) < min_fan_spokes:
+        for labels, reflected, start, disk_rotated in _boundary_windows(
+            boundary_count,
+            window_size,
+            allow_reflection=allow_reflection,
+            allow_disk_rotation=allow_disk_rotation,
+        ):
+            for w_side, x_side in assignments:
+                actual_w_parts = w_parts if w_side == "W" else x_parts
+                actual_x_parts = x_parts if x_side == "X" else w_parts
+                if any(label not in actual_w_parts["boundary_by_label"] for label in labels):
                     continue
-                for w_side, x_side in assignments:
-                    actual_w_parts = w_parts if w_side == "W" else x_parts
-                    actual_x_parts = x_parts if x_side == "X" else w_parts
-                    if any(label not in actual_w_parts["boundary_by_label"] for label in labels):
-                        continue
-                    if any(label not in actual_x_parts["boundary_by_label"] for label in labels):
-                        continue
-
-                    right_white = _same_colored_boundary_neighbor(
-                        actual_w_parts,
-                        terminal_labels,
-                        "white",
-                    )
-                    if right_white is None:
-                        continue
-
-                    fan = None
-                    fan_spokes: List[Pair] = []
-                    for node_id, color in actual_w_parts["colors"].items():
-                        if color != "white" or node_id in actual_w_parts["boundary_nodes"]:
-                            continue
-                        spoke_labels = [
-                            label
-                            for label in middle_labels
-                            if _pair(node_id, actual_w_parts["boundary_by_label"][label])
-                            in actual_w_parts["ordinary"]
-                        ]
-                        if len(spoke_labels) >= min_fan_spokes:
-                            fan = node_id
-                            fan_spokes = [
-                                _pair(node_id, actual_w_parts["boundary_by_label"][label])
-                                for label in spoke_labels
-                            ]
-                            break
-                    if fan is None:
-                        continue
-
-                    x_adj = _combined_adj(actual_x_parts)
-                    x_left = actual_x_parts["boundary_by_label"][left_label]
-                    x_terminals = [actual_x_parts["boundary_by_label"][label] for label in terminal_labels]
-                    path_edges: List[Pair] = []
-                    connected = True
-                    for node in x_terminals:
-                        path = _shortest_path_edges(x_adj, x_left, node)
-                        if not path:
-                            connected = False
-                            break
-                        path_edges.extend(path)
-                    if not connected:
-                        continue
-
-                    w_terminal_edges = [
-                        _pair(right_white, actual_w_parts["boundary_by_label"][label])
-                        for label in terminal_labels
-                    ]
-                    w_match = {
-                        "node_map": {
-                            "middle_fan": int(fan),
-                            "terminal_white": int(right_white),
-                        },
-                        "boundary_labels": list(labels),
-                        "ordinary_edges": sorted(set(w_terminal_edges + fan_spokes)),
-                        "hourglass_edges": [],
-                    }
-                    x_match = {
-                        "node_map": {
-                            "component_anchor": int(x_left),
-                            "terminal_1": int(x_terminals[0]),
-                            "terminal_2": int(x_terminals[1]),
-                        },
-                        "boundary_labels": list(labels),
-                        "ordinary_edges": sorted(set(path_edges) & actual_x_parts["ordinary"]),
-                        "hourglass_edges": sorted(set(path_edges) & actual_x_parts["hourglass"]),
-                    }
-                    found.append(
-                        {
-                            "rule_id": pattern["id"],
-                            "reason": pattern.get("conclusion", {}).get("reason", pattern["id"]),
-                            "source": pattern.get("source", {}),
-                            "boundary_labels": labels,
-                            "reflected": reflected,
-                            "disk_rotation_start": start,
-                            "disk_rotated": disk_rotated,
-                            "pair_swapped": w_side != "W",
-                            "W": w_match if w_side == "W" else x_match,
-                            "X": x_match if x_side == "X" else w_match,
-                        }
-                    )
-                    if len(found) >= max_matches:
-                        return found
+                if any(label not in actual_x_parts["boundary_by_label"] for label in labels):
+                    continue
+                w_candidates = w_local_matches(actual_w_parts, labels)
+                if not w_candidates:
+                    continue
+                x_candidates = x_local_matches(actual_x_parts, labels)
+                if not x_candidates:
+                    continue
+                for w_match in w_candidates:
+                    for x_match in x_candidates:
+                        found.append(
+                            {
+                                "rule_id": pattern["id"],
+                                "reason": pattern.get("conclusion", {}).get(
+                                    "reason", pattern["id"]
+                                ),
+                                "source": pattern.get("source", {}),
+                                "boundary_labels": labels,
+                                "reflected": reflected,
+                                "disk_rotation_start": start,
+                                "disk_rotated": disk_rotated,
+                                "pair_swapped": w_side != "W",
+                                "W": w_match if w_side == "W" else x_match,
+                                "X": x_match if x_side == "X" else w_match,
+                            }
+                        )
+                        if len(found) >= max_matches:
+                            return found
     return found
