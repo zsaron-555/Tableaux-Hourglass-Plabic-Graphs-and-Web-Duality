@@ -1,0 +1,72 @@
+{
+  "schema": "sl4_lemma49_zero_pair_v1",
+  "id": "sl4_additional_zero_6",
+  "source": {
+    "document": "Additional Zero Pairings.pdf",
+    "pages": [8],
+    "case": "additional_zero_6",
+    "region": "case 6"
+  },
+  "matching": {
+    "same_boundary_interval": true,
+    "allow_disk_rotation": true,
+    "allow_reflection": true,
+    "allow_pair_swap": true,
+    "rotation_order_source": "counterclockwise_from_embedding"
+  },
+  "conclusion": {
+    "action": "discharge_pair",
+    "reason": "sl4_additional_zero_6",
+    "pairing_value": 0
+  },
+  "W": {
+    "boundary_order": ["b1", "b2", "b3", "b4"],
+    "ports": ["p1"],
+    "nodes": [
+      {"id": "b1", "role": "disk_boundary", "color": "black", "x": -1.0, "y": 0.0},
+      {"id": "b2", "role": "disk_boundary", "color": "black", "x": -0.35, "y": -0.1},
+      {"id": "b3", "role": "disk_boundary", "color": "black", "x": 0.35, "y": -0.1},
+      {"id": "b4", "role": "disk_boundary", "color": "black", "x": 1.0, "y": 0.0},
+      {"id": "wl", "role": "internal", "color": "white", "x": -0.6, "y": 0.5},
+      {"id": "k", "role": "internal", "color": "black", "x": 0.0, "y": 0.95},
+      {"id": "wr", "role": "internal", "color": "white", "x": 0.6, "y": 0.5},
+      {"id": "p1", "role": "window_port", "color": "open", "x": 0.0, "y": 1.45}
+    ],
+    "edges": [
+      {"id": "e1", "u": "b1", "v": "wl", "kind": "ordinary", "multiplicity": 1},
+      {"id": "e2", "u": "b2", "v": "wl", "kind": "ordinary", "multiplicity": 1},
+      {"id": "h1", "u": "wl", "v": "k", "kind": "hourglass", "multiplicity": 2},
+      {"id": "e3", "u": "k", "v": "wr", "kind": "ordinary", "multiplicity": 1},
+      {"id": "e4", "u": "wr", "v": "b3", "kind": "ordinary", "multiplicity": 1},
+      {"id": "e5", "u": "wr", "v": "b4", "kind": "ordinary", "multiplicity": 1},
+      {"id": "e6", "u": "k", "v": "p1", "kind": "ordinary", "multiplicity": 1}
+    ],
+    "crossings": []
+  },
+  "X": {
+    "boundary_order": ["b1", "b2", "b3", "b4"],
+    "ports": ["p1"],
+    "nodes": [
+      {"id": "b1", "role": "disk_boundary", "color": "black", "x": -1.0, "y": 0.0},
+      {"id": "b2", "role": "disk_boundary", "color": "black", "x": -0.35, "y": -0.1},
+      {"id": "b3", "role": "disk_boundary", "color": "black", "x": 0.35, "y": -0.1},
+      {"id": "b4", "role": "disk_boundary", "color": "black", "x": 1.0, "y": 0.0},
+      {"id": "wl", "role": "internal", "color": "white", "x": -0.7, "y": 0.55},
+      {"id": "wc", "role": "internal", "color": "white", "x": 0.0, "y": 0.42},
+      {"id": "wr", "role": "internal", "color": "white", "x": 0.7, "y": 0.55},
+      {"id": "k", "role": "internal", "color": "black", "x": 0.0, "y": 1.05},
+      {"id": "p1", "role": "window_port", "color": "open", "x": 0.0, "y": 1.5}
+    ],
+    "edges": [
+      {"id": "e1", "u": "b1", "v": "wl", "kind": "ordinary", "multiplicity": 1},
+      {"id": "e2", "u": "b2", "v": "wc", "kind": "ordinary", "multiplicity": 1},
+      {"id": "e3", "u": "b3", "v": "wc", "kind": "ordinary", "multiplicity": 1},
+      {"id": "e4", "u": "b4", "v": "wr", "kind": "ordinary", "multiplicity": 1},
+      {"id": "e5", "u": "wl", "v": "k", "kind": "ordinary", "multiplicity": 1},
+      {"id": "h1", "u": "wc", "v": "k", "kind": "hourglass", "multiplicity": 2},
+      {"id": "e6", "u": "wr", "v": "k", "kind": "ordinary", "multiplicity": 1},
+      {"id": "e7", "u": "k", "v": "p1", "kind": "ordinary", "multiplicity": 1}
+    ],
+    "crossings": []
+  }
+}

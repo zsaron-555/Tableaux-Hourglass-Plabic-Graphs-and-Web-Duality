@@ -38,7 +38,41 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["id", "u", "v", "kind", "multiplicity"]
+            "required": ["id", "u", "v", "kind", "multiplicity"],
+            "properties": {
+              "kind": {
+                "enum": ["ordinary", "hourglass", "ordinary_or_hourglass"]
+              },
+              "multiplicity": {
+                "oneOf": [
+                  {"type": "integer", "enum": [1, 2]},
+                  {
+                    "type": "array",
+                    "items": {"type": "integer", "enum": [1, 2]},
+                    "minItems": 1,
+                    "uniqueItems": true
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["type", "edge_ids", "kind", "count"],
+            "properties": {
+              "type": {"const": "exact_edge_kind_count"},
+              "edge_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+                "uniqueItems": true
+              },
+              "kind": {"enum": ["ordinary", "hourglass"]},
+              "count": {"type": "integer", "minimum": 0}
+            }
           }
         },
         "crossings": {"type": "array"}
