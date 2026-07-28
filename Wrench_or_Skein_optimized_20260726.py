@@ -18,15 +18,18 @@ from __future__ import annotations
 
 import argparse
 import copy
+import functools
 import json
 import math
 import itertools
 import os
+import hashlib
 from collections import deque
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, MutableMapping, Optional, Set, Tuple
 
-import web_relation_rules_0714 as relation_rules
+import web_relation_rules_optimized_20260726 as relation_rules
+import ribbon_cache_optimized_20260726 as ribbon_cache
 
 
 Adjacency = Dict[int, Any]
@@ -475,18 +478,35 @@ def validate_adjacency(adj: Adjacency) -> None:
 def drop_nonreciprocal_references(adj: Adjacency) -> Adjacency:
     """Return a copy with one-sided adjacency artifacts removed."""
     new_adj = copy.deepcopy(adj)
-    for u, neighbors in list(new_adj.items()):
+    drop_nonreciprocal_references_inplace(new_adj)
+    return new_adj
+
+
+def drop_nonreciprocal_references_inplace(adj: Adjacency) -> None:
+    """Remove one-sided adjacency artifacts from an already-owned graph.
+
+    Local relation routines construct a private deep copy before rewiring it.
+    Copying that private result a second time solely to clean it is redundant.
+    """
+    reciprocal_neighbors = {
+        int(node): set(neighbor_list(neighbors))
+        for node, neighbors in adj.items()
+    }
+    for u, neighbors in list(adj.items()):
         if isinstance(neighbors, dict):
             for port, v in list(neighbors.items()):
-                if v is None or v not in new_adj or u not in neighbor_list(new_adj[v]):
+                if (
+                    v is None
+                    or v not in adj
+                    or int(u) not in reciprocal_neighbors[int(v)]
+                ):
                     neighbors[port] = None
         else:
-            new_adj[u] = [
+            adj[u] = [
                 int(v)
                 for v in neighbors
-                if v in new_adj and u in neighbor_list(new_adj[v])
+                if v in adj and int(u) in reciprocal_neighbors[int(v)]
             ]
-    return new_adj
 
 
 def clean_hourglasses_for_adj(adj: Adjacency, hourglasses: List[Hourglass]) -> List[Hourglass]:
@@ -666,6 +686,69 @@ def _proper_segment_crossing(
     return ab_c * ab_d < -eps and cd_a * cd_b < -eps
 
 
+Point = Tuple[float, float]
+Segment = Tuple[Point, Point]
+BBox = Tuple[float, float, float, float]
+
+
+def _segment_bbox(segment: Segment) -> BBox:
+    first, second = segment
+    return (
+        min(first[0], second[0]),
+        min(first[1], second[1]),
+        max(first[0], second[0]),
+        max(first[1], second[1]),
+    )
+
+
+def _control_bbox(curve: Tuple[Point, Point, Point, Point]) -> BBox:
+    """Bounding box of the cubic's control polygon.
+
+    A Bezier curve lies in the convex hull of its control points, so disjoint
+    control boxes certify that the curves cannot cross.
+    """
+    xs = tuple(point[0] for point in curve)
+    ys = tuple(point[1] for point in curve)
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _bbox_overlaps(first: BBox, second: BBox) -> bool:
+    """Cheap necessary condition for two closed segments to intersect."""
+    return not (
+        first[2] < second[0]
+        or second[2] < first[0]
+        or first[3] < second[1]
+        or second[3] < first[1]
+    )
+
+
+@functools.lru_cache(maxsize=131_072)
+def _sampled_cubic_segments(
+    curve: Tuple[Point, Point, Point, Point],
+    denominator: int,
+    first_index: int,
+    last_index: int,
+) -> Tuple[Tuple[Segment, BBox], ...]:
+    """Sample a cubic exactly as the original crossing oracle did.
+
+    The cache and bounding boxes only avoid recomputing points and rejecting
+    segment pairs that cannot intersect. The final orientation predicate is
+    unchanged.
+    """
+    points = tuple(
+        _cubic_point(list(curve), index / float(denominator))
+        for index in range(first_index, last_index + 1)
+    )
+    segments = tuple(zip(points, points[1:]))
+    return tuple((segment, _segment_bbox(segment)) for segment in segments)
+
+
+def _curve_tuple(curve: List[Point]) -> Tuple[Point, Point, Point, Point]:
+    if len(curve) != 4:
+        raise ValueError("A cubic curve must have exactly four control points.")
+    return tuple((float(x), float(y)) for x, y in curve)  # type: ignore[return-value]
+
+
 def _curve_crosses_incident_edge(
     curve: List[Tuple[float, float]],
     shared: int,
@@ -675,12 +758,20 @@ def _curve_crosses_incident_edge(
     """Test interiors only; the common endpoint is not a crossing."""
     if shared not in node_xy or other not in node_xy:
         return False
-    curve_points = [_cubic_point(curve, index / 32.0) for index in range(2, 33)]
     edge_start = _point_toward(node_xy[shared], node_xy[other], 0.04)
     edge_end = node_xy[other]
-    previous = _cubic_point(curve, 0.04)
-    for point in curve_points:
-        if _proper_segment_crossing(previous, point, edge_start, edge_end):
+    edge_segment = (edge_start, edge_end)
+    edge_bbox = _segment_bbox(edge_segment)
+    first_point = _cubic_point(curve, 0.04)
+    sampled_points = tuple(
+        _cubic_point(curve, index / 32.0) for index in range(2, 33)
+    )
+    previous = first_point
+    for point in sampled_points:
+        curve_segment = (previous, point)
+        if _bbox_overlaps(_segment_bbox(curve_segment), edge_bbox) and _proper_segment_crossing(
+            previous, point, edge_start, edge_end
+        ):
             return True
         previous = point
     return False
@@ -719,15 +810,21 @@ def _curve_crosses_curve(
     second: List[Tuple[float, float]],
 ) -> bool:
     """Test whether two cubics cross away from their common endpoint(s)."""
-    first_points = [_cubic_point(first, index / 40.0) for index in range(2, 39)]
-    second_points = [_cubic_point(second, index / 40.0) for index in range(2, 39)]
-    first_segments = list(zip(first_points, first_points[1:]))
-    second_segments = list(zip(second_points, second_points[1:]))
-    return any(
-        _proper_segment_crossing(a, b, c, d)
-        for a, b in first_segments
-        for c, d in second_segments
-    )
+    first_curve = _curve_tuple(first)
+    second_curve = _curve_tuple(second)
+    if not _bbox_overlaps(
+        _control_bbox(first_curve), _control_bbox(second_curve)
+    ):
+        return False
+    first_segments = _sampled_cubic_segments(first_curve, 40, 2, 38)
+    second_segments = _sampled_cubic_segments(second_curve, 40, 2, 38)
+    for (a, b), first_bbox in first_segments:
+        for (c, d), second_bbox in second_segments:
+            if not _bbox_overlaps(first_bbox, second_bbox):
+                continue
+            if _proper_segment_crossing(a, b, c, d):
+                return True
+    return False
 
 
 def edge_curves_from_history(
@@ -1043,7 +1140,7 @@ def apply_figure43_move(
     for vertex in (tl, tr, br, bl):
         if vertex in new_adj:
             del new_adj[vertex]
-    new_adj = drop_nonreciprocal_references(new_adj)
+    drop_nonreciprocal_references_inplace(new_adj)
     new_hgs = [
         hg
         for hg in remaining_hourglasses
@@ -1220,7 +1317,7 @@ def apply_antisymmetrizer_move(
     for vertex in (white, black):
         if vertex in new_adj:
             del new_adj[vertex]
-    new_adj = drop_nonreciprocal_references(new_adj)
+    drop_nonreciprocal_references_inplace(new_adj)
     validate_adjacency(new_adj)
     return new_adj
 
@@ -1466,7 +1563,7 @@ def smooth_one_hourglass_embedded(
 
     del new_adj[left]
     del new_adj[right]
-    new_adj = drop_nonreciprocal_references(new_adj)
+    drop_nonreciprocal_references_inplace(new_adj)
     validate_adjacency(new_adj)
     relation_multiplier = move_multiplier(smoothing)
     deferred_untwist_multiplier = -1 if len(untwists) % 2 else 1
@@ -3687,6 +3784,7 @@ def prove_pair_value_by_x_component_coloring(
             )
         if not candidates:
             break
+        candidates = deduplicate_pair_states(candidates)
         candidates.sort(key=lambda state: state["score"], reverse=True)
         beam = candidates[:guided_beam_width]
         if beam[0]["score"] > best_state["score"]:
@@ -3786,6 +3884,7 @@ def prove_pair_value_by_x_component_coloring(
                 -w_remaining,
             )
 
+        candidates = deduplicate_pair_states(candidates)
         candidates.sort(key=x_resolution_score, reverse=True)
         beam = candidates[:x_beam_width]
         if x_resolution_score(beam[0]) > x_resolution_score(best_state):
@@ -4617,6 +4716,678 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="In --prove-pair-zero mode, also allow strategic wrench moves on the reference/transpose web W.",
     )
     return parser
+
+
+# ---------------------------------------------------------------------------
+# Optimized computation layer
+# ---------------------------------------------------------------------------
+
+# The rotation-only untwist prototype disagreed with the established geometric
+# oracle on hard examples.  Keep geometry as the sole executable policy.
+_OPT_EMBEDDING_MODE = "geometry"
+_OPT_DEDUPLICATE_BEAM = os.environ.get("HG_OPT_DEDUPLICATE_BEAM", "0") != "0"
+_OPT_CANONICAL_TERM_MERGE = os.environ.get("HG_OPT_CANONICAL_TERM_MERGE", "0") != "0"
+
+_OPT_CONTEXT: Dict[str, Any] = {
+    "x_boundary_labels": {},
+    "w_boundary_labels": {},
+    "x_node_colors": {},
+    "w_node_colors": {},
+}
+_OPT_ACTIVE_HOURGLASSES: Tuple[Tuple[int, int], ...] = ()
+_CACHE_MISS = object()
+_OPT_DISAGREEMENT_SAMPLES: List[Dict[str, Any]] = []
+
+_geometry_smooth_one_hourglass_embedded = smooth_one_hourglass_embedded
+_uncached_lemma49_pair_match_for_term = lemma49_pair_match_for_term
+_uncached_prove_pair_value_by_x_component_coloring = prove_pair_value_by_x_component_coloring
+
+
+def set_optimized_embedding_mode(mode: str) -> None:
+    """Retain the established geometry-based untwist oracle."""
+    global _OPT_EMBEDDING_MODE
+    normalized = str(mode).strip().lower()
+    if normalized != "geometry":
+        raise ValueError(
+            "rotation-only untwist detection is disabled; optimized embedding "
+            "mode must be geometry"
+        )
+    _OPT_EMBEDDING_MODE = "geometry"
+
+
+def optimization_stats() -> Dict[str, Any]:
+    result: Dict[str, Any] = ribbon_cache.STATS.snapshot()
+    result.update(
+        {
+            "embedding_mode": _OPT_EMBEDDING_MODE,
+            "beam_deduplication": _OPT_DEDUPLICATE_BEAM,
+            "canonical_term_merge": _OPT_CANONICAL_TERM_MERGE,
+            "canonical_cache_size": len(ribbon_cache.CANONICAL_CACHE),
+            "fingerprint_cache_size": len(ribbon_cache.FINGERPRINT_CACHE),
+            "expansion_cache_size": len(ribbon_cache.EXPANSION_CACHE),
+            "lemma49_cache_size": len(ribbon_cache.LEMMA49_CACHE),
+            "lemma49_compiled_w_cache_size": len(
+                ribbon_cache.LEMMA49_COMPILED_W_CACHE
+            ),
+            "geometry_rotation_disagreement_samples": copy.deepcopy(
+                _OPT_DISAGREEMENT_SAMPLES
+            ),
+        }
+    )
+    return result
+
+
+def _rotation_boundary_support(
+    adj: Adjacency,
+    boundary_labels: BoundaryLabels,
+    start: int,
+    cut: int,
+) -> List[int]:
+    seen = {int(cut)}
+    stack = [int(start)]
+    labels: Set[int] = set()
+    while stack:
+        node = stack.pop()
+        if node in seen:
+            continue
+        seen.add(node)
+        if node in boundary_labels:
+            labels.add(int(boundary_labels[node]))
+        stack.extend(
+            int(neighbor)
+            for neighbor in neighbor_list(adj.get(node, []))
+            if int(neighbor) not in seen
+        )
+    return sorted(labels)
+
+
+def _rotation_lies_on_short_arc(
+    label: int,
+    first: int,
+    second: int,
+    modulus: int,
+) -> bool:
+    clockwise = (second - first) % modulus
+    counterclockwise = (first - second) % modulus
+    if clockwise == counterclockwise:
+        return False
+    if clockwise < counterclockwise:
+        return 0 < (label - first) % modulus < clockwise
+    return 0 < (first - label) % modulus < counterclockwise
+
+
+def combinatorial_deferred_untwists(
+    adj: Adjacency,
+    hg: Hourglass,
+    smoothing: str,
+    boundary_labels: Optional[BoundaryLabels],
+) -> List[Dict[str, Any]]:
+    """Compute shared-leaf parity from the ribbon routing, without curves.
+
+    The crossing branch reverses the two wrench strands.  A transported strand
+    acquires one untwist when an additional edge at its leaf is supported on
+    the short boundary interval between the two opposite leaves.  Same-slot
+    parallel routing preserves that order and contributes no such untwist.
+    """
+    ribbon_cache.STATS.rotation_untwist_checks += 1
+    if smoothing != "crossing" or not boundary_labels:
+        return []
+
+    white = int(hg["white"])
+    black = int(hg["black"])
+    if white not in adj or black not in adj:
+        return []
+    w0, w1 = int(adj[white]["top"]), int(adj[white]["bot"])
+    b0, b1 = int(adj[black]["top"]), int(adj[black]["bot"])
+    pairings = [(w0, white, b1, black), (w1, white, b0, black)]
+    opposite_pair_by_leaf = {
+        **{leaf: (b0, b1) for leaf in (w0, w1)},
+        **{leaf: (w0, w1) for leaf in (b0, b1)},
+    }
+    endpoint_by_leaf = {
+        int(w0): white,
+        int(w1): white,
+        int(b0): black,
+        int(b1): black,
+    }
+    modulus = max(int(value) for value in boundary_labels.values())
+    left = int(hg["left"])
+    right = int(hg["right"])
+    untwists: List[Dict[str, Any]] = []
+    seen: Set[Tuple[int, int, int]] = set()
+    for first_port, first_endpoint, second_port, second_endpoint in pairings:
+        for leaf, removed_endpoint, new_neighbor in (
+            (first_port, first_endpoint, second_port),
+            (second_port, second_endpoint, first_port),
+        ):
+            opposite = opposite_pair_by_leaf[int(leaf)]
+            first_support = _rotation_boundary_support(
+                adj, boundary_labels, int(opposite[0]), endpoint_by_leaf[int(opposite[0])]
+            )
+            second_support = _rotation_boundary_support(
+                adj, boundary_labels, int(opposite[1]), endpoint_by_leaf[int(opposite[1])]
+            )
+            if (
+                int(opposite[0]) not in boundary_labels
+                or int(opposite[1]) not in boundary_labels
+                or len(first_support) != 1
+                or len(second_support) != 1
+            ):
+                continue
+            for existing_neighbor in neighbor_list(adj.get(int(leaf), [])):
+                if existing_neighbor in {removed_endpoint, new_neighbor, left, right}:
+                    continue
+                extra_support = _rotation_boundary_support(
+                    adj, boundary_labels, int(existing_neighbor), int(leaf)
+                )
+                if not extra_support or not all(
+                    _rotation_lies_on_short_arc(
+                        label, first_support[0], second_support[0], modulus
+                    )
+                    for label in extra_support
+                ):
+                    continue
+                key = (int(leaf), int(new_neighbor), int(existing_neighbor))
+                if key in seen:
+                    continue
+                seen.add(key)
+                untwists.append(
+                    {
+                        "vertex": int(leaf),
+                        "new_neighbor": int(new_neighbor),
+                        "existing_neighbor": int(existing_neighbor),
+                        "reason": "combinatorial_rotation_between_opposite_leaves",
+                    }
+                )
+    ribbon_cache.STATS.rotation_untwists += len(untwists)
+    return untwists
+
+
+def _rotation_smooth_one_hourglass_embedded(
+    adj: Adjacency,
+    hg: Hourglass,
+    smoothing: str,
+    *,
+    boundary_labels: Optional[BoundaryLabels],
+    forced_untwists: Optional[List[Dict[str, Any]]],
+) -> Tuple[Adjacency, Dict[str, Any]]:
+    cache_key = (
+        "rotation-smooth-v1",
+        ribbon_cache.raw_ribbon_key(
+            adj,
+            (
+                {"white": first, "black": second}
+                for first, second in _OPT_ACTIVE_HOURGLASSES
+            ),
+            boundary_labels or {},
+            None,
+        ),
+        hourglass_key(hg),
+        str(smoothing),
+        tuple(sorted((boundary_labels or {}).items())),
+        None if forced_untwists is None else json.dumps(forced_untwists, sort_keys=True),
+    )
+    cached = ribbon_cache.EXPANSION_CACHE.get(cache_key, _CACHE_MISS)
+    if cached is not _CACHE_MISS:
+        ribbon_cache.STATS.expansion_cache_hits += 1
+        return copy.deepcopy(cached)
+    ribbon_cache.STATS.expansion_cache_misses += 1
+    new_adj, metadata = _geometry_smooth_one_hourglass_embedded(
+        adj,
+        hg,
+        smoothing,
+        node_xy=None,
+        boundary_labels=boundary_labels,
+        forced_untwists=[],
+        existing_edge_curves=None,
+    )
+    untwists = (
+        copy.deepcopy(forced_untwists)
+        if forced_untwists is not None
+        else combinatorial_deferred_untwists(adj, hg, smoothing, boundary_labels)
+    )
+    metadata["deferred_untwists"] = untwists
+    metadata["deferred_untwist_count"] = len(untwists)
+    metadata["deferred_untwist_multiplier"] = -1 if len(untwists) % 2 else 1
+    metadata["embedding_policy"] = "combinatorial_rotation_transport"
+    metadata["edge_curves"] = []
+    result = (new_adj, metadata)
+    ribbon_cache.EXPANSION_CACHE.put(cache_key, copy.deepcopy(result))
+    return result
+
+
+def _geometry_smooth_one_hourglass_embedded_cached(
+    adj: Adjacency,
+    hg: Hourglass,
+    smoothing: str,
+    *,
+    node_xy: Optional[NodeXY],
+    boundary_labels: Optional[BoundaryLabels],
+    forced_untwists: Optional[List[Dict[str, Any]]],
+    existing_edge_curves: Optional[Dict[Tuple[int, int], List[Tuple[float, float]]]],
+) -> Tuple[Adjacency, Dict[str, Any]]:
+    """Memoize the established geometric oracle without changing its inputs.
+
+    Unlike the canonical state cache, this key is deliberately ID-sensitive:
+    the oracle depends on the exact carried cubic curves and plotted
+    coordinates.  Reuse is therefore permitted only for byte-for-byte
+    equivalent embedded states.
+    """
+    xy_key = tuple(
+        sorted(
+            (int(node), round(float(point[0]), 12), round(float(point[1]), 12))
+            for node, point in (node_xy or {}).items()
+            if int(node) in adj
+        )
+    )
+    curves_key = tuple(
+        (
+            int(edge[0]),
+            int(edge[1]),
+            tuple(
+                (round(float(point[0]), 12), round(float(point[1]), 12))
+                for point in points
+            ),
+        )
+        for edge, points in sorted((existing_edge_curves or {}).items())
+    )
+    cache_key = (
+        "geometry-smooth-v1",
+        ribbon_cache.raw_ribbon_key(
+            adj,
+            (
+                {"white": first, "black": second}
+                for first, second in _OPT_ACTIVE_HOURGLASSES
+            ),
+            boundary_labels or {},
+            None,
+        ),
+        hourglass_key(hg),
+        str(smoothing),
+        tuple(sorted((boundary_labels or {}).items())),
+        xy_key,
+        curves_key,
+        None if forced_untwists is None else json.dumps(forced_untwists, sort_keys=True),
+    )
+    cached = ribbon_cache.EXPANSION_CACHE.get(cache_key, _CACHE_MISS)
+    if cached is not _CACHE_MISS:
+        ribbon_cache.STATS.expansion_cache_hits += 1
+        return copy.deepcopy(cached)
+    ribbon_cache.STATS.expansion_cache_misses += 1
+    result = _geometry_smooth_one_hourglass_embedded(
+        adj,
+        hg,
+        smoothing,
+        node_xy=node_xy,
+        boundary_labels=boundary_labels,
+        forced_untwists=forced_untwists,
+        existing_edge_curves=existing_edge_curves,
+    )
+    ribbon_cache.EXPANSION_CACHE.put(cache_key, copy.deepcopy(result))
+    return result
+
+
+def smooth_one_hourglass_embedded(
+    adj: Adjacency,
+    hg: Hourglass,
+    smoothing: str,
+    *,
+    node_xy: Optional[NodeXY] = None,
+    boundary_labels: Optional[BoundaryLabels] = None,
+    forced_untwists: Optional[List[Dict[str, Any]]] = None,
+    existing_edge_curves: Optional[Dict[Tuple[int, int], List[Tuple[float, float]]]] = None,
+) -> Tuple[Adjacency, Dict[str, Any]]:
+    return _geometry_smooth_one_hourglass_embedded_cached(
+        adj,
+        hg,
+        smoothing,
+        node_xy=node_xy,
+        boundary_labels=boundary_labels,
+        forced_untwists=forced_untwists,
+        existing_edge_curves=existing_edge_curves,
+    )
+
+
+def _context_for_side(side: str) -> Tuple[BoundaryLabels, NodeColors]:
+    prefix = "x" if side.lower() == "x" else "w"
+    return (
+        _OPT_CONTEXT.get(f"{prefix}_boundary_labels", {}),
+        _OPT_CONTEXT.get(f"{prefix}_node_colors", {}),
+    )
+
+
+def pair_term_key(term: Dict[str, Any]) -> Tuple[Any, ...]:
+    x_bounds, x_colors = _context_for_side("x")
+    w_bounds, w_colors = _context_for_side("w")
+    history = term.get("history", [])
+    return (
+        ribbon_cache.canonical_ribbon_key(
+            term["x_adj"], term["x_remaining"], x_bounds, x_colors
+        ),
+        ribbon_cache.canonical_ribbon_key(
+            term["w_adj"], term["w_remaining"], w_bounds, w_colors
+        ),
+        # Flattened adjacency alone does not contain deferred ribbon untwists.
+        # Keep their parity in the algebraic state key so two geometrically
+        # identical terms with opposite transported orientations never merge.
+        relation_history_orientation_sign(history, "X"),
+        relation_history_orientation_sign(history, "W"),
+        # Preserve a conservative warning trail when a state can be reached
+        # both with and without the experimental three-strand relation.
+        any(
+            move.get("phase") == "antisymmetrizer"
+            or "3strand" in str(move.get("rule", "")).lower()
+            or "three_strand" in str(move.get("rule", "")).lower()
+            for move in history
+        ),
+    )
+
+
+def pair_term_fingerprint(term: Dict[str, Any]) -> Tuple[Any, ...]:
+    x_bounds, x_colors = _context_for_side("x")
+    w_bounds, w_colors = _context_for_side("w")
+    history = term.get("history", [])
+    return (
+        ribbon_cache.refinement_ribbon_fingerprint(
+            term["x_adj"], term["x_remaining"], x_bounds, x_colors
+        ),
+        ribbon_cache.refinement_ribbon_fingerprint(
+            term["w_adj"], term["w_remaining"], w_bounds, w_colors
+        ),
+        relation_history_orientation_sign(history, "X"),
+        relation_history_orientation_sign(history, "W"),
+        any(
+            move.get("phase") == "antisymmetrizer"
+            or "3strand" in str(move.get("rule", "")).lower()
+            or "three_strand" in str(move.get("rule", "")).lower()
+            for move in history
+        ),
+    )
+
+
+def consolidate_pair_terms(terms: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not _OPT_CANONICAL_TERM_MERGE:
+        consolidated: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+        for term in terms:
+            history = term.get("history", [])
+            key = (
+                get_edge_tuple(term["x_adj"]),
+                tuple(sorted(hourglass_key(hg) for hg in term["x_remaining"])),
+                tagged_rotation_tuple(term["x_adj"]),
+                get_edge_tuple(term["w_adj"]),
+                tuple(sorted(hourglass_key(hg) for hg in term["w_remaining"])),
+                tagged_rotation_tuple(term["w_adj"]),
+                relation_history_orientation_sign(history, "X"),
+                relation_history_orientation_sign(history, "W"),
+                any(
+                    move.get("phase") == "antisymmetrizer"
+                    or "3strand" in str(move.get("rule", "")).lower()
+                    or "three_strand" in str(move.get("rule", "")).lower()
+                    for move in history
+                ),
+            )
+            if key not in consolidated:
+                consolidated[key] = {**term, "coeff": 0}
+            else:
+                ribbon_cache.STATS.term_merges += 1
+            consolidated[key]["coeff"] += int(term["coeff"])
+        return [
+            term for term in consolidated.values() if int(term["coeff"]) != 0
+        ]
+
+    buckets: Dict[Tuple[Any, ...], List[Dict[str, Any]]] = {}
+    for term in terms:
+        buckets.setdefault(pair_term_fingerprint(term), []).append(term)
+    result: List[Dict[str, Any]] = []
+    for bucket in buckets.values():
+        if len(bucket) == 1:
+            result.append(bucket[0])
+            continue
+        consolidated: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+        for term in bucket:
+            key = pair_term_key(term)
+            if key not in consolidated:
+                consolidated[key] = {**term, "coeff": 0}
+            else:
+                ribbon_cache.STATS.term_merges += 1
+            consolidated[key]["coeff"] += int(term["coeff"])
+        result.extend(
+            term for term in consolidated.values() if int(term["coeff"]) != 0
+        )
+    return result
+
+
+def pair_state_key(state: Dict[str, Any]) -> Tuple[Any, ...]:
+    active = tuple(
+        sorted(
+            (int(term["coeff"]), pair_term_key(term))
+            for term in state.get("active", [])
+        )
+    )
+    return ("pair-state-v1", active)
+
+
+def pair_state_fingerprint(state: Dict[str, Any]) -> Tuple[Any, ...]:
+    active = tuple(
+        sorted(
+            (int(term["coeff"]), pair_term_fingerprint(term))
+            for term in state.get("active", [])
+        )
+    )
+    return ("pair-state-refined-v1", active)
+
+
+def deduplicate_pair_states(states: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    ribbon_cache.STATS.beam_candidates_raw += len(states)
+    if not _OPT_DEDUPLICATE_BEAM:
+        ribbon_cache.STATS.beam_candidates_unique += len(states)
+        return states
+    buckets: Dict[Tuple[Any, ...], List[Dict[str, Any]]] = {}
+    for state in states:
+        buckets.setdefault(pair_state_fingerprint(state), []).append(state)
+    result: List[Dict[str, Any]] = []
+    for bucket in buckets.values():
+        if len(bucket) == 1:
+            result.append(bucket[0])
+            continue
+        unique: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+        for state in bucket:
+            key = pair_state_key(state)
+            previous = unique.get(key)
+            if previous is None or tuple(state.get("score", ())) > tuple(
+                previous.get("score", ())
+            ):
+                unique[key] = state
+        result.extend(unique.values())
+    ribbon_cache.STATS.beam_candidates_unique += len(result)
+    return result
+
+
+def _stable_graph_json_key(graph: Dict[str, Any]) -> str:
+    payload = json.dumps(graph, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def compile_lemma49_matcher_for_term(
+    term: Dict[str, Any],
+    w_boundary_labels: BoundaryLabels,
+    w_node_colors: Optional[NodeColors],
+) -> Optional[Any]:
+    """Compile all fixed-W Lemma 4.9 matches once for a reduction run."""
+    if w_node_colors is None:
+        return None
+    cache_key = (
+        "compiled-lemma49-w-v1",
+        ribbon_cache.raw_ribbon_key(
+            term["w_adj"],
+            term["w_remaining"],
+            w_boundary_labels,
+            w_node_colors,
+        ),
+    )
+    cached = ribbon_cache.LEMMA49_COMPILED_W_CACHE.get(
+        cache_key, _CACHE_MISS
+    )
+    if cached is not _CACHE_MISS:
+        ribbon_cache.STATS.lemma49_compiled_w_cache_hits += 1
+        return cached
+    ribbon_cache.STATS.lemma49_compiled_w_cache_misses += 1
+    w_parts = relation_rules.actual_graph_parts_from_native(
+        term["w_adj"],
+        w_boundary_labels,
+        term["w_remaining"],
+        w_node_colors,
+    )
+    matcher = relation_rules.CompiledLemma49Matcher(w_parts)
+    ribbon_cache.LEMMA49_COMPILED_W_CACHE.put(cache_key, matcher)
+    return matcher
+
+
+def lemma49_pair_match_for_term(
+    term: Dict[str, Any],
+    x_boundary_labels: BoundaryLabels,
+    w_boundary_labels: BoundaryLabels,
+    x_node_colors: Optional[NodeColors],
+    w_node_colors: Optional[NodeColors],
+    *,
+    compiled_matcher: Optional[Any] = None,
+    x_state_key: Optional[Tuple[Any, ...]] = None,
+) -> Optional[Dict[str, Any]]:
+    if x_node_colors is None or w_node_colors is None:
+        return None
+    if compiled_matcher is not None:
+        x_parts = relation_rules.actual_graph_parts_from_native(
+            term["x_adj"],
+            x_boundary_labels,
+            term["x_remaining"],
+            x_node_colors,
+        )
+        return compiled_matcher.match(x_parts, x_key=x_state_key)
+
+    x_graph = graph_json_from_term_side(
+        term["x_adj"], x_boundary_labels, term["x_remaining"], x_node_colors
+    )
+    w_graph = graph_json_from_term_side(
+        term["w_adj"], w_boundary_labels, term["w_remaining"], w_node_colors
+    )
+    key = ("lemma49-v1", _stable_graph_json_key(w_graph), _stable_graph_json_key(x_graph))
+    cached = ribbon_cache.LEMMA49_CACHE.get(key, _CACHE_MISS)
+    if cached is not _CACHE_MISS:
+        ribbon_cache.STATS.lemma49_cache_hits += 1
+        return copy.deepcopy(cached)
+    ribbon_cache.STATS.lemma49_cache_misses += 1
+    matches = relation_rules.detect_sl4_lemma49_zero_pair(w_graph, x_graph, max_matches=1)
+    result = matches[0] if matches else None
+    ribbon_cache.LEMMA49_CACHE.put(key, copy.deepcopy(result))
+    return result
+
+
+def expand_pair_term(
+    term: Dict[str, Any],
+    side: str,
+    hg: Hourglass,
+    *,
+    node_xy: Optional[NodeXY] = None,
+    boundary_labels: Optional[BoundaryLabels] = None,
+) -> List[Dict[str, Any]]:
+    """Expand without constructing carried display curves in rotation mode."""
+    global _OPT_ACTIVE_HOURGLASSES
+    if side not in {"X", "W"}:
+        raise ValueError("side must be X or W.")
+    previous_active_hourglasses = _OPT_ACTIVE_HOURGLASSES
+    remaining = term["x_remaining"] if side == "X" else term["w_remaining"]
+    _OPT_ACTIVE_HOURGLASSES = tuple(
+        sorted(
+            tuple(sorted((int(item["white"]), int(item["black"]))))
+            for item in remaining
+        )
+    )
+    children = []
+    try:
+        for smoothing in ("crossing", "parallel"):
+            if side == "X":
+                child_x_adj, embedding = smooth_one_hourglass_embedded(
+                    term["x_adj"],
+                    hg,
+                    smoothing,
+                    node_xy=node_xy,
+                    boundary_labels=boundary_labels,
+                    existing_edge_curves=(
+                        edge_curves_from_history(term.get("history", []), "X", term["x_adj"])
+                        if _OPT_EMBEDDING_MODE in {"geometry", "crosscheck"}
+                        else None
+                    ),
+                )
+                child_x_remaining = remaining_after_move(term["x_remaining"], hg)
+                child_w_adj = term["w_adj"]
+                child_w_remaining = term["w_remaining"]
+            else:
+                child_x_adj = term["x_adj"]
+                child_x_remaining = term["x_remaining"]
+                child_w_adj, embedding = smooth_one_hourglass_embedded(
+                    term["w_adj"],
+                    hg,
+                    smoothing,
+                    node_xy=node_xy,
+                    boundary_labels=boundary_labels,
+                    existing_edge_curves=(
+                        edge_curves_from_history(term.get("history", []), "W", term["w_adj"])
+                        if _OPT_EMBEDDING_MODE in {"geometry", "crosscheck"}
+                        else None
+                    ),
+                )
+                child_w_remaining = remaining_after_move(term["w_remaining"], hg)
+            move = {
+                "side": side,
+                "hourglass": [int(hg["white"]), int(hg["black"])],
+                "smoothing": smoothing,
+                "local_case": hg.get("local_case", ""),
+                **embedding,
+            }
+            children.append(
+                {
+                    "x_adj": child_x_adj,
+                    "x_remaining": child_x_remaining,
+                    "w_adj": child_w_adj,
+                    "w_remaining": child_w_remaining,
+                    "coeff": int(term["coeff"]) * int(embedding["coefficient_multiplier"]),
+                    "history": term.get("history", []) + [move],
+                }
+            )
+    finally:
+        _OPT_ACTIVE_HOURGLASSES = previous_active_hourglasses
+    return children
+
+
+def prove_pair_value_by_x_component_coloring(
+    x_adj: Adjacency,
+    x_boundary_labels: BoundaryLabels,
+    x_hourglasses: List[Hourglass],
+    w_adj: Adjacency,
+    w_boundary_labels: BoundaryLabels,
+    w_hourglasses: List[Hourglass],
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    global _OPT_CONTEXT
+    _OPT_CONTEXT = {
+        "x_boundary_labels": x_boundary_labels,
+        "w_boundary_labels": w_boundary_labels,
+        "x_node_colors": kwargs.get("x_node_colors") or {},
+        "w_node_colors": kwargs.get("w_node_colors") or {},
+    }
+    ribbon_cache.reset_stats(clear_caches=False)
+    result = _uncached_prove_pair_value_by_x_component_coloring(
+        x_adj,
+        x_boundary_labels,
+        x_hourglasses,
+        w_adj,
+        w_boundary_labels,
+        w_hourglasses,
+        **kwargs,
+    )
+    result = copy.deepcopy(result)
+    result["optimization"] = optimization_stats()
+    return result
 
 
 def main() -> None:

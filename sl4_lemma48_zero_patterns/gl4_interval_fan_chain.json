@@ -1,0 +1,51 @@
+{
+  "schema": "sl4_lemma48_zero_pair_v2",
+  "id": "sl4_lemma48_gl4_five_boundary_fan_chain",
+  "source": {
+    "document": "IMG_5961.heic",
+    "lemma": "generalized BCGMMW Lemma 4.8",
+    "specialization": "GL4",
+    "case": "corrected five-boundary fan-chain zero",
+    "supersedes": "the earlier variable-window detector from Lemma4.8_SL4.pdf"
+  },
+  "matching": {
+    "same_boundary_interval": true,
+    "allow_disk_rotation": true,
+    "allow_reflection": true,
+    "allow_pair_swap": false,
+    "boundary_window_size": 5,
+    "crossings_are_not_vertices": true,
+    "ordinary_and_hourglass_edges_are_distinct": true,
+    "match_mode": "required_local_subgraph"
+  },
+  "local_model": {
+    "boundary_interval": ["v1", "v2", "v3", "v4", "v5"],
+    "W_requires": [
+      "there are three distinct internal white vertices w_left, w_fan, and w_right and one internal black vertex b_hub",
+      "ordinary edges join w_left to v1 and b_hub",
+      "ordinary edges join w_fan to v2, v3, v4, and b_hub",
+      "an ordinary edge joins w_right to v5",
+      "one hourglass joins w_right to b_hub"
+    ],
+    "X_requires": [
+      "there are three distinct internal white vertices xw1, xw2, xw3 and two distinct internal black vertices xb1, xb2",
+      "ordinary edges join xw1 to v1 and v2",
+      "an hourglass joins xw1 to xb1, and an ordinary edge joins xb1 to xw2",
+      "an ordinary edge joins xw2 to v3",
+      "an hourglass joins xw2 to xb2, and an ordinary edge joins xb2 to xw3",
+      "ordinary edges join xw3 to v4 and v5",
+      "external incident edges not drawn in the local window are unrestricted"
+    ],
+    "coloring_contradiction": "The X chain forces the boundary colors carried by v1,...,v5 as in the corrected Lemma 4.8 argument; the three middle colors then meet at w_fan in W and violate the GL4 local coloring condition."
+  },
+  "orientation_orbit": {
+    "rotations": "all 16 cyclic shifts of the disk boundary labels",
+    "reflections": "both cyclic orientations for every rotation",
+    "implementation": "enumerate a five-label cyclic window with step +1 and step -1 from every boundary label"
+  },
+  "conclusion": {
+    "action": "discharge_pair",
+    "reason": "sl4_lemma48_gl4_five_boundary_fan_chain",
+    "pairing_value": 0
+  }
+}
