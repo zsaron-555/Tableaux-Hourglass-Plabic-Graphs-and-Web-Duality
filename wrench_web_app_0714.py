@@ -1101,7 +1101,13 @@ def reconstruct_run(x_path: Path, w_path: Path, proof: Dict[str, Any]):
     w_hgs = wrench.sort_hourglasses_by_boundary_distance(w_adj, w_bounds, w_hgs)
 
     def move_key(move: Dict[str, Any]) -> Tuple[str, str, Tuple[int, ...], str]:
-        local_piece = move.get("hourglass", move.get("vertices", []))
+        local_piece = move.get(
+            "hourglass",
+            move.get(
+                "vertices",
+                list(move.get("cycle_vertices", [])) + list(move.get("outer_vertices", [])),
+            ),
+        )
         return (
             str(move.get("phase", "wrench")),
             str(move.get("side", "X")),
@@ -1414,7 +1420,13 @@ def reconstruct_run(x_path: Path, w_path: Path, proof: Dict[str, Any]):
 
 
 def move_key_for_display(move: Dict[str, Any]) -> Tuple[str, str, Tuple[int, ...], str]:
-    local_piece = move.get("hourglass", move.get("vertices", []))
+    local_piece = move.get(
+        "hourglass",
+        move.get(
+            "vertices",
+            list(move.get("cycle_vertices", [])) + list(move.get("outer_vertices", [])),
+        ),
+    )
     return (
         str(move.get("phase", "wrench")),
         str(move.get("side", "X")),
@@ -1514,6 +1526,8 @@ def render_additional_branch_pictures(
 
 
 def phase_display_label(phase: str) -> str:
+    if phase == "square_move":
+        return "SL4 square normalization"
     if phase == "double_edge_skein":
         return "GPPSS double-edge reduction"
     if phase == "figure43":
@@ -1527,6 +1541,8 @@ def phase_display_label(phase: str) -> str:
 
 def move_piece_label(move: Dict[str, Any]) -> str:
     phase = str(move.get("phase", "main_search"))
+    if phase == "square_move":
+        return "four-hourglass square"
     if phase == "double_edge_skein":
         if move.get("kind") == "hourglass_plus_edge":
             return "hourglass plus ordinary edge"
@@ -1552,6 +1568,17 @@ def relation_before_highlights(
     phase = str(move.get("phase", "main_search"))
     if str(move.get("side", "X")) != side:
         return {}, {}
+
+    if phase == "square_move":
+        cycle = [int(vertex) for vertex in move.get("cycle_vertices", [])]
+        outer = [int(vertex) for vertex in move.get("outer_vertices", [])]
+        color = "#cf2f2f"
+        edges = {
+            tuple(sorted((cycle[index], cycle[(index + 1) % len(cycle)]))): color
+            for index in range(len(cycle))
+        } if len(cycle) == 4 else {}
+        nodes = {vertex: color for vertex in {*cycle, *outer}}
+        return edges, nodes
 
     if phase == "double_edge_skein":
         white = int(move["white"])
@@ -1614,7 +1641,13 @@ def move_sequence_table(history: List[Dict[str, Any]]) -> str:
         running_coeff *= multiplier
         phase = str(move.get("phase", "main_search"))
         phase_label = phase_display_label(phase)
-        target = move.get("hourglass", move.get("vertices", []))
+        target = move.get(
+            "hourglass",
+            move.get(
+                "vertices",
+                list(move.get("cycle_vertices", [])) + list(move.get("outer_vertices", [])),
+            ),
+        )
         rows.append(
             "<tr>"
             f"<td>{idx}</td>"
@@ -1749,12 +1782,16 @@ def branch_move_picture(
 
     is_figure43 = move.get("phase") == "figure43"
     is_structural_relation = move.get("phase") in {
+        "square_move",
         "figure43",
         "antisymmetrizer",
         "double_edge_skein",
     }
     selected = tuple(sorted(int(x) for x in move.get("hourglass", [])))
-    local_piece = move.get("vertices", list(selected))
+    local_piece = move.get(
+        "vertices",
+        move.get("cycle_vertices", list(selected)),
+    )
     side = str(move.get("side", ""))
     smoothing = str(move.get("smoothing", ""))
     if move.get("phase") == "antisymmetrizer" and move.get("permutation_label"):
@@ -1895,12 +1932,16 @@ def branch_process_pictures(
 
         is_figure43 = move.get("phase") == "figure43"
         is_structural_relation = move.get("phase") in {
+            "square_move",
             "figure43",
             "antisymmetrizer",
             "double_edge_skein",
         }
         selected = tuple(sorted(int(x) for x in move.get("hourglass", [])))
-        local_piece = move.get("vertices", list(selected))
+        local_piece = move.get(
+            "vertices",
+            move.get("cycle_vertices", list(selected)),
+        )
         side = str(move.get("side", ""))
         smoothing = str(move.get("smoothing", ""))
         phase = str(move.get("phase", "main_search"))

@@ -604,8 +604,10 @@ def replace_one_neighbor(node: int, old_neighbor: int, new_neighbor: int, adj: A
 
 
 def splice_pair(adj: Adjacency, a_endpoint: int, a_port: int, b_endpoint: int, b_port: int) -> None:
-    replace_neighbor(a_port, a_endpoint, b_port, adj)
-    replace_neighbor(b_port, b_endpoint, a_port, adj)
+    # A port denotes one half-edge slot.  Replacing every repeated occurrence
+    # corrupts parallel edges and makes the second splice fail.
+    replace_one_neighbor(a_port, a_endpoint, b_port, adj)
+    replace_one_neighbor(b_port, b_endpoint, a_port, adj)
 
 
 def swap_cyclic_neighbors(adj: Adjacency, node: int, first: int, second: int) -> None:
@@ -786,6 +788,272 @@ def ordinary_edge_pairs(adj: Adjacency) -> Set[Tuple[int, int]]:
 
 def _hourglass_pairs(hourglasses: List[Hourglass]) -> Set[Tuple[int, int]]:
     return {_edge_pair(hg["white"], hg["black"]) for hg in hourglasses}
+
+
+def _canonical_four_cycle(vertices: Iterable[int]) -> Tuple[int, int, int, int]:
+    """Canonicalize an unoriented four-cycle without using screen geometry."""
+    cycle = tuple(int(vertex) for vertex in vertices)
+    if len(cycle) != 4 or len(set(cycle)) != 4:
+        raise ValueError("A square move requires four distinct cycle vertices.")
+    reverse = tuple(reversed(cycle))
+    variants = [
+        orientation[offset:] + orientation[:offset]
+        for orientation in (cycle, reverse)
+        for offset in range(4)
+    ]
+    return min(variants)
+
+
+def _simple_port_strand(endpoint: HourglassPorts, port: str) -> str:
+    """Return the hourglass strand adjacent to one tagged simple port."""
+    pattern = tuple(endpoint.slot_pattern)
+    if len(pattern) != 4 or port not in pattern:
+        raise ValueError(f"Missing tagged four-slot pattern for simple port {port!r}.")
+    index = pattern.index(port)
+    adjacent = [
+        pattern[(index - 1) % 4],
+        pattern[(index + 1) % 4],
+    ]
+    strands = [token for token in adjacent if token.startswith("strand:")]
+    if len(strands) != 1:
+        raise ValueError(
+            f"Simple port {port!r} should be adjacent to exactly one hourglass strand: "
+            f"{pattern!r}."
+        )
+    return strands[0]
+
+
+def detect_hourglass_reducing_square_moves(
+    adj: Adjacency,
+    remaining_hourglasses: List[Hourglass],
+    node_colors: Optional[NodeColors],
+) -> List[Dict[str, Any]]:
+    """Detect the monotone 4-hourglass -> 0-hourglass square move.
+
+    This is the all-hourglass square in Striker's SL4 square-move slide.  Each
+    corner of an alternating ordinary four-cycle is the inner endpoint of a
+    distinct hourglass.  Moving the square through all four hourglasses makes
+    the four outer endpoints the new ordinary square and removes the four
+    inner endpoints.
+
+    Only this strictly hourglass-decreasing orientation is executable here.
+    It needs no new temporary vertices and can never participate in a square-
+    move cycle.
+    """
+    if not node_colors or len(remaining_hourglasses) < 4:
+        return []
+
+    endpoint_hourglass: Dict[int, Hourglass] = {}
+    for hourglass in remaining_hourglasses:
+        white = int(hourglass["white"])
+        black = int(hourglass["black"])
+        if white in endpoint_hourglass or black in endpoint_hourglass:
+            # The current schema requires disjoint hourglass endpoint pairs.
+            return []
+        endpoint_hourglass[white] = hourglass
+        endpoint_hourglass[black] = hourglass
+
+    ordinary_neighbors = {
+        int(node): tuple(int(neighbor) for neighbor in neighbor_list(neighbors))
+        for node, neighbors in adj.items()
+    }
+    candidate_corners = {
+        vertex
+        for vertex in endpoint_hourglass
+        if isinstance(adj.get(vertex), HourglassPorts)
+        and len(ordinary_neighbors.get(vertex, ())) == 2
+    }
+    if len(candidate_corners) < 4:
+        return []
+    candidate_neighbors = {
+        vertex: tuple(
+            neighbor
+            for neighbor in ordinary_neighbors.get(vertex, ())
+            if neighbor in candidate_corners
+        )
+        for vertex in candidate_corners
+    }
+    raw_cycles: Set[Tuple[int, int, int, int]] = set()
+    for a, a_neighbors in candidate_neighbors.items():
+        for b in a_neighbors:
+            if b == a:
+                continue
+            for c in candidate_neighbors.get(b, ()):
+                if c in {a, b}:
+                    continue
+                for d in candidate_neighbors.get(c, ()):
+                    if d in {a, b, c}:
+                        continue
+                    if a in candidate_neighbors.get(d, ()):
+                        raw_cycles.add(_canonical_four_cycle((a, b, c, d)))
+
+    matches: List[Dict[str, Any]] = []
+    for canonical_cycle in sorted(raw_cycles):
+        # Recover an actual cyclic order beginning at the smallest vertex.
+        a = canonical_cycle[0]
+        possible_orders = []
+        for second in ordinary_neighbors.get(a, ()):
+            if second not in canonical_cycle:
+                continue
+            remaining = set(canonical_cycle) - {a, second}
+            for third in ordinary_neighbors.get(second, ()):
+                if third not in remaining:
+                    continue
+                fourth_candidates = remaining - {third}
+                if len(fourth_candidates) != 1:
+                    continue
+                fourth = next(iter(fourth_candidates))
+                if fourth in ordinary_neighbors.get(third, ()) and a in ordinary_neighbors.get(fourth, ()):
+                    possible_orders.append((a, second, third, fourth))
+        if not possible_orders:
+            continue
+        cycle = min(possible_orders)
+
+        colors = tuple(node_colors.get(vertex, "") for vertex in cycle)
+        if colors not in {
+            ("black", "white", "black", "white"),
+            ("white", "black", "white", "black"),
+        }:
+            continue
+        if any(
+            not isinstance(adj.get(vertex), HourglassPorts)
+            or set(ordinary_neighbors.get(vertex, ())) != {
+                cycle[(index - 1) % 4],
+                cycle[(index + 1) % 4],
+            }
+            or vertex not in endpoint_hourglass
+            for index, vertex in enumerate(cycle)
+        ):
+            continue
+
+        hourglasses = [endpoint_hourglass[vertex] for vertex in cycle]
+        if len({hourglass_key(hourglass) for hourglass in hourglasses}) != 4:
+            continue
+        outer = []
+        valid = True
+        for vertex, hourglass in zip(cycle, hourglasses):
+            white = int(hourglass["white"])
+            black = int(hourglass["black"])
+            other = black if vertex == white else white
+            if (
+                other in cycle
+                or not isinstance(adj.get(other), HourglassPorts)
+                or len(ordinary_neighbors.get(other, ())) != 2
+                or not _colors_are_opposite(
+                    node_colors.get(vertex),
+                    node_colors.get(other),
+                )
+            ):
+                valid = False
+                break
+            outer.append(other)
+        if not valid or len(set(outer)) != 4:
+            continue
+
+        matches.append(
+            {
+                "rule": "SL4_square_move_4hg_to_0hg",
+                "cycle_vertices": [int(vertex) for vertex in cycle],
+                "outer_vertices": [int(vertex) for vertex in outer],
+                "hourglasses": [
+                    [int(hourglass["white"]), int(hourglass["black"])]
+                    for hourglass in hourglasses
+                ],
+                "hourglass_delta": -4,
+                "coefficient_multiplier": 1,
+            }
+        )
+    return matches
+
+
+def apply_hourglass_reducing_square_move(
+    adj: Adjacency,
+    remaining_hourglasses: List[Hourglass],
+    match: Dict[str, Any],
+    node_colors: Optional[NodeColors],
+) -> Tuple[Adjacency, List[Hourglass]]:
+    """Move an ordinary square through four hourglasses, preserving tags."""
+    if match.get("rule") != "SL4_square_move_4hg_to_0hg":
+        raise ValueError(f"Unsupported square move: {match.get('rule')!r}.")
+
+    cycle = tuple(int(vertex) for vertex in match["cycle_vertices"])
+    outer = tuple(int(vertex) for vertex in match["outer_vertices"])
+    if len(cycle) != 4 or len(outer) != 4:
+        raise ValueError("The reducing square move requires four inner and four outer vertices.")
+
+    hourglass_by_inner: Dict[int, Hourglass] = {}
+    for vertex in cycle:
+        candidates = [
+            hourglass
+            for hourglass in remaining_hourglasses
+            if vertex in {int(hourglass["white"]), int(hourglass["black"])}
+        ]
+        if len(candidates) != 1:
+            raise ValueError(f"Square corner {vertex} does not have one live hourglass.")
+        hourglass_by_inner[vertex] = candidates[0]
+
+    inner_to_outer = dict(zip(cycle, outer))
+    strand_destinations: Dict[Tuple[int, int], Dict[str, int]] = {}
+    for inner in cycle:
+        inner_ports = adj.get(inner)
+        if not isinstance(inner_ports, HourglassPorts):
+            raise ValueError(f"Square corner {inner} has lost its tagged hourglass ports.")
+        destinations: Dict[str, int] = {}
+        for port in ("top", "bot"):
+            neighbor = int(inner_ports[port])
+            if neighbor not in inner_to_outer:
+                raise ValueError(f"Square port {inner}:{port} leaves the detected cycle.")
+            destinations[_simple_port_strand(inner_ports, port)] = int(inner_to_outer[neighbor])
+        if set(destinations) != {"strand:0", "strand:1"}:
+            raise ValueError(f"Could not transport both strands at square corner {inner}.")
+        strand_destinations[hourglass_key(hourglass_by_inner[inner])] = destinations
+
+    new_adj = copy.deepcopy(adj)
+    for inner, outer_vertex in inner_to_outer.items():
+        outer_ports = adj.get(outer_vertex)
+        if not isinstance(outer_ports, HourglassPorts):
+            raise ValueError(f"Outer square vertex {outer_vertex} has lost its tagged ports.")
+        destinations = strand_destinations[hourglass_key(hourglass_by_inner[inner])]
+        transported: List[int] = []
+        for token in outer_ports.slot_pattern:
+            if token == "top":
+                transported.append(int(outer_ports["top"]))
+            elif token == "bot":
+                transported.append(int(outer_ports["bot"]))
+            elif token in destinations:
+                transported.append(int(destinations[token]))
+            else:
+                raise ValueError(
+                    f"Unknown tagged slot {token!r} at outer square vertex {outer_vertex}."
+                )
+        if len(transported) != 4 or len(set(transported)) != 4:
+            raise ValueError(
+                f"Square transport produced an invalid tagged order at {outer_vertex}: "
+                f"{transported!r}."
+            )
+        new_adj[outer_vertex] = transported
+
+    for inner in cycle:
+        new_adj.pop(inner, None)
+
+    removed = {hourglass_key(hourglass_by_inner[inner]) for inner in cycle}
+    new_hourglasses = [
+        hourglass
+        for hourglass in remaining_hourglasses
+        if hourglass_key(hourglass) not in removed
+    ]
+    new_adj = drop_nonreciprocal_references(new_adj)
+    new_hourglasses = clean_hourglasses_for_adj(new_adj, new_hourglasses)
+    validate_adjacency(new_adj)
+
+    if node_colors:
+        for u, neighbors in new_adj.items():
+            for v in neighbor_list(neighbors):
+                if not _colors_are_opposite(node_colors.get(int(u)), node_colors.get(int(v))):
+                    raise ValueError(f"Square move broke bipartiteness at edge {u}-{v}.")
+    if len(new_hourglasses) != len(remaining_hourglasses) - 4:
+        raise ValueError("Reducing square move did not remove exactly four hourglasses.")
+    return new_adj, new_hourglasses
 
 
 def _ordered_cycle_vertices(vertices: Iterable[int], node_xy: NodeXY) -> List[int]:
@@ -2424,6 +2692,98 @@ def pair_state_key(state: Dict[str, Any]) -> Tuple[Any, ...]:
     )
 
 
+def pair_state_reduction_key(state: Dict[str, Any]) -> Tuple[Any, ...]:
+    """Projective structural key used only for reduction-cycle detection.
+
+    A relation loop can return to the same active expression multiplied by an
+    overall scalar (most commonly a sign).  The ordinary algebraic state key
+    must retain that scalar, but continuing to reduce the same expression
+    shape again cannot produce new information.  Divide all active
+    coefficients by their gcd and normalize the first sign so ``S`` and
+    ``-2*S`` share one reduction key.
+    """
+    entries = [
+        (pair_term_key(term), int(term["coeff"]))
+        for term in state.get("active", [])
+        if int(term["coeff"]) != 0
+    ]
+    entries.sort(key=lambda item: repr(item[0]))
+    if not entries:
+        return ("pair-reduction-state-v1", ())
+    divisor = 0
+    for _, coeff in entries:
+        divisor = math.gcd(divisor, abs(coeff))
+    divisor = max(1, divisor)
+    normalized = [(key, coeff // divisor) for key, coeff in entries]
+    if normalized[0][1] < 0:
+        normalized = [(key, -coeff) for key, coeff in normalized]
+    return ("pair-reduction-state-v1", tuple(normalized))
+
+
+def x_resolution_complexity(
+    state: Dict[str, Any],
+    x_boundary_labels: BoundaryLabels,
+    x_node_colors: Optional[NodeColors],
+) -> Tuple[int, int, int, int]:
+    """Complexity used to prefer genuinely forward X reductions."""
+    x_hourglasses = sum(len(term["x_remaining"]) for term in state.get("active", []))
+    x_black = sum(
+        len(term_x_internal_black_vertices(term, x_boundary_labels, x_node_colors))
+        for term in state.get("active", [])
+    )
+    return (
+        x_hourglasses + x_black,
+        x_hourglasses,
+        x_black,
+        len(state.get("active", [])),
+    )
+
+
+def cycle_guard_successors(
+    parent: Dict[str, Any],
+    successors: List[Dict[str, Any]],
+    x_boundary_labels: BoundaryLabels,
+    x_node_colors: Optional[NodeColors],
+) -> Tuple[List[Dict[str, Any]], int, int]:
+    """Reject projective returns along one branch and annotate progress.
+
+    A state reached elsewhere in the beam is not automatically a cycle: its
+    discharged terms and future proof route can differ. Increasing moves also
+    remain available. The guard only rejects a return to an ancestor of the
+    current branch, which is the actual reduction loop we need to prevent.
+    """
+    parent_key = pair_state_reduction_key(parent)
+    ancestors = set(parent.get("_x_reduction_ancestors", ()))
+    ancestors.add(parent_key)
+    parent_complexity = x_resolution_complexity(
+        parent, x_boundary_labels, x_node_colors
+    )
+    kept: List[Dict[str, Any]] = []
+    rejected = 0
+    worsening = 0
+    for child in successors:
+        child_key = pair_state_reduction_key(child)
+        if child_key in ancestors:
+            rejected += 1
+            continue
+        child_complexity = x_resolution_complexity(
+            child, x_boundary_labels, x_node_colors
+        )
+        if child_complexity < parent_complexity:
+            progress_class = 2
+        elif child_complexity == parent_complexity:
+            progress_class = 1
+        else:
+            progress_class = 0
+            worsening += 1
+        child["_x_reduction_ancestors"] = frozenset(ancestors)
+        child["_x_progress_class"] = progress_class
+        child["_x_parent_complexity"] = parent_complexity
+        child["_x_complexity"] = child_complexity
+        kept.append(child)
+    return kept, rejected, worsening
+
+
 def deduplicate_pair_states(states: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Keep one representative of every structurally identical active state."""
     unique: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
@@ -2636,6 +2996,61 @@ def expand_pair_term_by_figure43(
     return children
 
 
+def expand_pair_term_by_square_move(
+    term: Dict[str, Any],
+    side: str,
+    match: Dict[str, Any],
+    node_colors: Optional[NodeColors],
+) -> List[Dict[str, Any]]:
+    """Apply one coefficient-one, invariant-preserving reducing square move."""
+    if side not in {"X", "W"}:
+        raise ValueError("side must be X or W.")
+    multiplier = int(match.get("coefficient_multiplier", 1))
+    if multiplier != 1:
+        raise ValueError("Square normalization must preserve the coefficient.")
+    if side == "X":
+        child_x_adj, child_x_remaining = apply_hourglass_reducing_square_move(
+            term["x_adj"],
+            term["x_remaining"],
+            match,
+            node_colors,
+        )
+        child_w_adj = term["w_adj"]
+        child_w_remaining = term["w_remaining"]
+    else:
+        child_x_adj = term["x_adj"]
+        child_x_remaining = term["x_remaining"]
+        child_w_adj, child_w_remaining = apply_hourglass_reducing_square_move(
+            term["w_adj"],
+            term["w_remaining"],
+            match,
+            node_colors,
+        )
+    move = {
+        "phase": "square_move",
+        "side": side,
+        "rule": match["rule"],
+        "cycle_vertices": [int(vertex) for vertex in match["cycle_vertices"]],
+        "outer_vertices": [int(vertex) for vertex in match["outer_vertices"]],
+        "hourglasses_removed": [
+            [int(endpoint) for endpoint in pair]
+            for pair in match["hourglasses"]
+        ],
+        "hourglass_delta": -4,
+        "coefficient_multiplier": 1,
+    }
+    return [
+        {
+            "x_adj": child_x_adj,
+            "x_remaining": child_x_remaining,
+            "w_adj": child_w_adj,
+            "w_remaining": child_w_remaining,
+            "coeff": int(term["coeff"]),
+            "history": term.get("history", []) + [move],
+        }
+    ]
+
+
 def expand_pair_term_by_double_edge_skein(
     term: Dict[str, Any],
     side: str,
@@ -2793,6 +3208,55 @@ def choose_pair_successors(
     successors: List[Dict[str, Any]] = []
     for term_idx, term in enumerate(active):
         term = normalize_pair_term(term)
+        square_matches = detect_hourglass_reducing_square_moves(
+            term["x_adj"],
+            term["x_remaining"],
+            x_node_colors,
+        )
+        if square_matches:
+            # Normalize X before any branching relation.  This equality has
+            # coefficient +1 and removes four hourglasses, so the inverse
+            # orientation can never re-enter the search and form a cycle.
+            match = square_matches[0]
+            children = expand_pair_term_by_square_move(
+                term,
+                "X",
+                match,
+                x_node_colors,
+            )
+            next_terms = consolidate_pair_terms(
+                active[:term_idx] + active[term_idx + 1 :] + children
+            )
+            next_active, newly_discharged = discharge_pair_terms_by_common_fork(
+                next_terms,
+                x_boundary_labels,
+                w_boundary_labels,
+                allowed_forks,
+                x_node_colors,
+                w_node_colors,
+                use_lemma49=use_lemma49,
+                use_lemma48=use_lemma48,
+            )
+            next_discharged = discharged + newly_discharged
+            return [
+                {
+                    "active": next_active,
+                    "discharged": next_discharged,
+                    "expanded_relation": "square_move",
+                    "expanded_side": "X",
+                    "expanded_rule": match["rule"],
+                    "expanded_vertices": [
+                        int(vertex) for vertex in match["cycle_vertices"]
+                    ],
+                    "score": score_pair_state(
+                        next_active,
+                        next_discharged,
+                        x_boundary_labels,
+                        w_boundary_labels,
+                        allowed_forks,
+                    ),
+                }
+            ]
         reduction_choices: List[Tuple[str, Dict[str, Any]]] = [
             (
                 "X",
@@ -3198,6 +3662,34 @@ def replay_pair_history(
     current_wh = copy.deepcopy(w_hourglasses)
     for move in history:
         side = move["side"]
+        if move.get("phase") == "square_move":
+            match = {
+                "rule": move["rule"],
+                "cycle_vertices": [int(vertex) for vertex in move["cycle_vertices"]],
+                "outer_vertices": [int(vertex) for vertex in move["outer_vertices"]],
+                "hourglasses": [
+                    [int(endpoint) for endpoint in pair]
+                    for pair in move["hourglasses_removed"]
+                ],
+                "coefficient_multiplier": 1,
+            }
+            if side == "X":
+                current_x, current_xh = apply_hourglass_reducing_square_move(
+                    current_x,
+                    current_xh,
+                    match,
+                    None,
+                )
+            elif side == "W":
+                current_w, current_wh = apply_hourglass_reducing_square_move(
+                    current_w,
+                    current_wh,
+                    match,
+                    None,
+                )
+            else:
+                raise ValueError(f"Unknown square-move side in history: {side!r}")
+            continue
         smoothing = move["smoothing"]
         if move.get("phase") == "double_edge_skein":
             match = {
@@ -3729,6 +4221,56 @@ def choose_x_resolution_successors(
     successors: List[Dict[str, Any]] = []
     for term_idx, term in enumerate(active):
         term = normalize_pair_term(term)
+        square_matches = detect_hourglass_reducing_square_moves(
+            term["x_adj"],
+            term["x_remaining"],
+            x_node_colors,
+        )
+        if square_matches:
+            # A square move is an equality, not a linear branching relation.
+            # Apply one canonical strictly reducing move before considering
+            # any wrench expansion, then normalize again on the next step.
+            match = square_matches[0]
+            children = expand_pair_term_by_square_move(
+                term,
+                "X",
+                match,
+                x_node_colors,
+            )
+            next_terms = consolidate_pair_terms(
+                active[:term_idx] + active[term_idx + 1 :] + children
+            )
+            next_active, newly_discharged = discharge_pair_terms_by_common_fork(
+                next_terms,
+                x_boundary_labels,
+                w_boundary_labels,
+                allowed_forks,
+                x_node_colors,
+                w_node_colors,
+                use_lemma49=use_lemma49,
+                use_lemma48=use_lemma48,
+            )
+            next_discharged = discharged + newly_discharged
+            state = {
+                "active": next_active,
+                "discharged": next_discharged,
+                "expanded_relation": "square_move",
+                "expanded_side": "X",
+                "expanded_rule": match["rule"],
+                "expanded_vertices": [int(vertex) for vertex in match["cycle_vertices"]],
+                "score": score_pair_state(
+                    next_active,
+                    next_discharged,
+                    x_boundary_labels,
+                    w_boundary_labels,
+                    allowed_forks,
+                ),
+            }
+            # Deterministic preprocessing avoids creating four equivalent
+            # search branches merely by choosing square moves in a different
+            # order.  The hourglass count drops by four, so repeated calls
+            # terminate even before the ancestor-state guard is consulted.
+            return [state]
         double_edge_matches = detect_double_edge_skein_moves(
             term["x_adj"],
             term["x_remaining"],
@@ -4202,6 +4744,9 @@ def prove_pair_value_by_x_component_coloring(
     best_state = beam[0]
     step_summaries: List[Dict[str, Any]] = []
 
+    cycle_rejections = 0
+    worsening_successors = 0
+
     for step in range(guided_steps):
         if any(not state["active"] for state in beam):
             best_state = next(state for state in beam if not state["active"])
@@ -4218,8 +4763,7 @@ def prove_pair_value_by_x_component_coloring(
             )
         candidates: List[Dict[str, Any]] = []
         for state in beam:
-            candidates.extend(
-                choose_pair_successors(
+            raw_successors = choose_pair_successors(
                     state["active"],
                     state["discharged"],
                     x_boundary_labels,
@@ -4233,7 +4777,15 @@ def prove_pair_value_by_x_component_coloring(
                     use_lemma49=use_lemma49,
                     use_lemma48=use_lemma48,
                 )
+            guarded, rejected, worsening = cycle_guard_successors(
+                state,
+                raw_successors,
+                x_boundary_labels,
+                x_node_colors,
             )
+            candidates.extend(guarded)
+            cycle_rejections += rejected
+            worsening_successors += worsening
         if not candidates:
             break
         candidates.sort(key=lambda state: state["score"], reverse=True)
@@ -4255,12 +4807,16 @@ def prove_pair_value_by_x_component_coloring(
                 "expanded_relation": beam[0].get("expanded_relation"),
                 "expanded_rule": beam[0].get("expanded_rule"),
                 "expanded_vertices": beam[0].get("expanded_vertices"),
+                "cycle_rejections": cycle_rejections,
+                "worsening_successors_seen": worsening_successors,
             }
         )
 
-    # Phase 2: resolve X-hourglasses and internal black vertices only.  Keep a
-    # structural visited set so forward relations cannot cycle back to an
-    # algebraically identical state under a different proof history.
+    # Phase 2: resolve X-hourglasses and internal black vertices only.  The
+    # branch-local ancestry guard prevents a reduction path from returning to
+    # the same projective active expression while allowing increasing moves
+    # when they lead to a genuinely new state.  The exact visited set merges
+    # identical active expressions reached elsewhere in the beam.
     seen_x_resolution_states = {pair_state_key(state) for state in beam}
     for step in range(x_resolution_steps + 1):
         for state in beam:
@@ -4303,8 +4859,7 @@ def prove_pair_value_by_x_component_coloring(
 
         candidates = []
         for state in beam:
-            candidates.extend(
-                choose_x_resolution_successors(
+            raw_successors = choose_x_resolution_successors(
                     state["active"],
                     state["discharged"],
                     x_boundary_labels,
@@ -4317,7 +4872,15 @@ def prove_pair_value_by_x_component_coloring(
                     use_lemma48=use_lemma48,
                     allow_three_strand=allow_three_strand,
                 )
+            guarded, rejected, worsening = cycle_guard_successors(
+                state,
+                raw_successors,
+                x_boundary_labels,
+                x_node_colors,
             )
+            candidates.extend(guarded)
+            cycle_rejections += rejected
+            worsening_successors += worsening
         if not candidates:
             break
         candidates = deduplicate_pair_states(candidates)
@@ -4329,7 +4892,7 @@ def prove_pair_value_by_x_component_coloring(
         if not candidates:
             break
 
-        def x_resolution_score(state: Dict[str, Any]) -> Tuple[int, int, int, int, int, int, int]:
+        def x_resolution_score(state: Dict[str, Any]) -> Tuple[int, ...]:
             x_remaining = sum(len(t["x_remaining"]) for t in state["active"])
             x_black = sum(
                 len(term_x_internal_black_vertices(t, x_boundary_labels, x_node_colors))
@@ -4344,6 +4907,7 @@ def prove_pair_value_by_x_component_coloring(
                 len(state["discharged"]),
                 -len(state["active"]),
                 -w_remaining,
+                int(state.get("_x_progress_class", 1)),
             )
 
         candidates.sort(key=x_resolution_score, reverse=True)
@@ -4366,6 +4930,11 @@ def prove_pair_value_by_x_component_coloring(
                 "expanded_relation": beam[0].get("expanded_relation"),
                 "expanded_rule": beam[0].get("expanded_rule"),
                 "expanded_vertices": beam[0].get("expanded_vertices"),
+                "cycle_rejections": cycle_rejections,
+                "worsening_successors_seen": worsening_successors,
+                "selected_progress_class": int(
+                    beam[0].get("_x_progress_class", 1)
+                ),
             }
         )
 

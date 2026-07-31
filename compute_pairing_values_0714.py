@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
-"""Compute pairing values using the isolated cached ribbon-state engine.
+"""Compute only pairing values using the current 0714 relation code.
 
-The runner keeps the production 0714 files untouched.  In parallel mode it
-groups a bounded number of tasks sharing the same X in one worker so the lazy
-X-expansion and Lemma 4.9 caches are reused without delaying checkpoints for an
-entire large X-block.
+This is the batch runner to use when proof pictures / branch pages are not
+needed.  It imports the current 0714 app and wrench code, but writes only the
+pairing value summary for each survivor pair.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
-import json
+import importlib
 import os
 import signal
 import sys
@@ -40,7 +39,6 @@ FIELDNAMES = [
     "active_term_count",
     "discharged_term_count",
     "elapsed_sec",
-    "timeout_state_artifact",
     "error",
 ]
 
@@ -56,43 +54,6 @@ class TaskTimeoutError(TimeoutError):
 
 def task_timeout_handler(_signum: int, _frame: Any) -> None:
     raise TaskTimeoutError("pairing exceeded the per-task time limit")
-
-
-def write_timeout_state_artifact(
-    *,
-    w_idx: int,
-    w_word: str,
-    x_word: str,
-    elapsed_sec: float,
-    checkpoint: Optional[Dict[str, Any]],
-) -> str:
-    artifact_dir_raw = os.environ.get("PROBLEM3_TIMEOUT_ARTIFACT_DIR", "").strip()
-    if not artifact_dir_raw:
-        return ""
-    artifact_dir = Path(artifact_dir_raw).expanduser().resolve()
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-    artifact_path = artifact_dir / (
-        f"{int(w_idx):05d}_{w_word}__{x_word}__timeout_state.json"
-    )
-    payload = {
-        "schema": "sl4_pairing_timeout_artifact_v1",
-        "status": "timeout",
-        "computed_orientation": {
-            "w_idx": int(w_idx),
-            "w_word": str(w_word),
-            "x_word": str(x_word),
-        },
-        "elapsed_sec": float(elapsed_sec),
-        "recorded_at_unix": time.time(),
-        "checkpoint": checkpoint,
-        "checkpoint_available": checkpoint is not None,
-    }
-    temporary_path = artifact_path.with_suffix(".json.tmp")
-    with temporary_path.open("w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, sort_keys=True)
-        f.write("\n")
-    os.replace(temporary_path, artifact_path)
-    return str(artifact_path)
 
 
 def import_0714_app():
@@ -111,10 +72,12 @@ def init_worker(project_root: str) -> None:
     if engine_path in sys.path:
         sys.path.remove(engine_path)
     sys.path.insert(0, engine_path)
-    import Wrench_or_Skein_optimized_20260726 as optimized_wrench  # type: ignore
+    if ENGINE_DIR != GITHUB_APP_DIR:
+        sys.modules.pop("Wrench_or_Skein_0714", None)
+    current_wrench = importlib.import_module("Wrench_or_Skein_0714")
 
     _APP = app
-    _WRENCH = optimized_wrench
+    _WRENCH = current_wrench
     _PARSED_GRAPH_CACHE = {}
 
 
@@ -140,36 +103,6 @@ def append_row(path: Path, row: Dict[str, Any]) -> None:
             writer.writeheader()
         writer.writerow({field: row.get(field, "") for field in FIELDNAMES})
         f.flush()
-
-
-def format_result_for_output(
-    row: Dict[str, Any],
-    record_reversed_as_original: bool,
-) -> Dict[str, Any]:
-    """Store a reversed computation under the original <W,X> convention."""
-    formatted = dict(row)
-    actual_w_index = formatted.pop("_w_graph_index", "")
-    if not record_reversed_as_original:
-        return formatted
-
-    actual_w_word = formatted.get("w_word", "")
-    actual_x_word = formatted.get("x_word", "")
-    actual_x_index = formatted.get("x_index", "")
-    formatted["w_idx"] = actual_x_index
-    formatted["w_word"] = actual_x_word
-    formatted["x_word"] = actual_w_word
-    formatted["x_index"] = actual_w_index
-
-    reverse_warning = (
-        "WARNING: stored as <W,X>, but computed in reversed order <X,W>"
-    )
-    existing_warning = str(formatted.get("pairing_value_warning", "") or "").strip()
-    formatted["pairing_value_warning"] = (
-        f"{existing_warning}; {reverse_warning}"
-        if existing_warning
-        else reverse_warning
-    )
-    return formatted
 
 
 def log_line(path: Path, message: str) -> None:
@@ -235,25 +168,6 @@ def round_robin_by_w(tasks: Sequence[Tuple[int, str, str]]) -> List[Tuple[int, s
     return ordered
 
 
-def group_tasks_by_x(
-    tasks: Sequence[Tuple[int, str, str]],
-    chunk_size: int,
-) -> List[List[Tuple[int, str, str]]]:
-    """Return bounded same-X chunks suitable for one cache-owning worker."""
-    grouped: Dict[str, List[Tuple[int, str, str]]] = {}
-    for task in tasks:
-        grouped.setdefault(task[2], []).append(task)
-    chunks: List[List[Tuple[int, str, str]]] = []
-    size = max(1, int(chunk_size))
-    for x_word in sorted(grouped):
-        items = sorted(grouped[x_word], key=lambda item: (item[0], item[1]))
-        chunks.extend(items[offset : offset + size] for offset in range(0, len(items), size))
-    # Interleave large and small chunks so the tail is less likely to contain
-    # only the most expensive X-blocks.
-    chunks.sort(key=lambda group: (-len(group), group[0][2], group[0][0]))
-    return chunks
-
-
 def compute_one(task: Tuple[int, str, str]) -> Dict[str, Any]:
     if _APP is None or _WRENCH is None:
         raise RuntimeError("worker was not initialized")
@@ -262,8 +176,6 @@ def compute_one(task: Tuple[int, str, str]) -> Dict[str, Any]:
     wrench = _WRENCH
     w_idx, w_word, x_word = task
     start = time.time()
-    x_index: Any = ""
-    _w_index: Any = ""
     try:
         w_path = app.resolve_graph(w_word, "W")
         x_path = app.resolve_graph(x_word, "X")
@@ -295,7 +207,7 @@ def compute_one(task: Tuple[int, str, str]) -> Dict[str, Any]:
                 guided_beam_width=120,
                 x_beam_width=500,
                 guided_steps=None,
-                x_resolution_steps=120,
+                x_resolution_steps=None,
                 x_node_colors=x_node_colors,
                 x_node_xy=x_node_xy,
                 w_node_colors=w_node_colors,
@@ -313,7 +225,6 @@ def compute_one(task: Tuple[int, str, str]) -> Dict[str, Any]:
             "w_word": w_word,
             "x_word": x_word,
             "x_index": x_index,
-            "_w_graph_index": _w_index,
             "status": proof.get("status", ""),
             "final_pairing_value": proof.get("final_pairing_value", ""),
             "used_three_strand_relation": "yes" if used_three_strand else "no",
@@ -321,38 +232,23 @@ def compute_one(task: Tuple[int, str, str]) -> Dict[str, Any]:
             "active_term_count": proof.get("active_term_count", ""),
             "discharged_term_count": proof.get("discharged_term_count", ""),
             "elapsed_sec": f"{time.time() - start:.3f}",
-            "timeout_state_artifact": "",
             "error": "",
         }
 
     except Exception as exc:  # noqa: BLE001 - keep the batch checkpointing.
         timed_out = isinstance(exc, TaskTimeoutError)
-        timeout_artifact = ""
-        checkpoint = None
-        if timed_out:
-            if hasattr(wrench, "get_pair_progress_checkpoint"):
-                checkpoint = wrench.get_pair_progress_checkpoint()
-            timeout_artifact = write_timeout_state_artifact(
-                w_idx=w_idx,
-                w_word=w_word,
-                x_word=x_word,
-                elapsed_sec=time.time() - start,
-                checkpoint=checkpoint,
-            )
         return {
             "w_idx": w_idx,
             "w_word": w_word,
             "x_word": x_word,
-            "x_index": x_index,
-            "_w_graph_index": _w_index,
+            "x_index": "",
             "status": "timeout" if timed_out else "error",
             "final_pairing_value": "",
             "used_three_strand_relation": "",
             "pairing_value_warning": "",
-            "active_term_count": checkpoint.get("active_term_count", "") if checkpoint else "",
-            "discharged_term_count": checkpoint.get("discharged_term_count", "") if checkpoint else "",
+            "active_term_count": "",
+            "discharged_term_count": "",
             "elapsed_sec": f"{time.time() - start:.3f}",
-            "timeout_state_artifact": timeout_artifact,
             "error": f"{type(exc).__name__}: {exc}",
         }
 
@@ -366,14 +262,6 @@ def compute_one_with_timeout(task: Tuple[int, str, str], task_timeout: Optional[
         return compute_one(task)
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
-
-
-def compute_x_group_with_timeout(
-    tasks: Sequence[Tuple[int, str, str]],
-    task_timeout: Optional[float],
-) -> List[Dict[str, Any]]:
-    """Compute one same-X chunk serially inside a cache-owning worker."""
-    return [compute_one_with_timeout(task, task_timeout) for task in tasks]
 
 
 def has_internal_black_vertices(wrench: Any, term: Dict[str, Any], x_bounds: Any, x_node_colors: Any) -> bool:
@@ -519,7 +407,6 @@ def run_parallel(
     project_root: str,
     workers: int,
     task_timeout: Optional[float] = None,
-    record_reversed_as_original: bool = False,
 ) -> None:
     start = time.time()
     last_log = start
@@ -537,10 +424,7 @@ def run_parallel(
             done_futures, _ = wait(pending, return_when=FIRST_COMPLETED)
             for future in done_futures:
                 pending.pop(future)
-                row = format_result_for_output(
-                    future.result(),
-                    record_reversed_as_original,
-                )
+                row = future.result()
                 append_row(out_path, row)
                 completed += 1
 
@@ -561,75 +445,12 @@ def run_parallel(
                 last_log = now
 
 
-def run_parallel_grouped_by_x(
-    tasks: Sequence[Tuple[int, str, str]],
-    out_path: Path,
-    log_path: Path,
-    project_root: str,
-    workers: int,
-    task_timeout: Optional[float],
-    x_cache_chunk: int,
-    record_reversed_as_original: bool = False,
-) -> None:
-    groups = group_tasks_by_x(tasks, x_cache_chunk)
-    start = time.time()
-    last_log = start
-    submitted_groups = 0
-    completed = 0
-    max_pending = max(workers * 2, 1)
-    with ProcessPoolExecutor(
-        max_workers=workers,
-        initializer=init_worker,
-        initargs=(project_root,),
-    ) as executor:
-        pending = {}
-        while submitted_groups < len(groups) and len(pending) < max_pending:
-            group = groups[submitted_groups]
-            future = executor.submit(compute_x_group_with_timeout, group, task_timeout)
-            pending[future] = group
-            submitted_groups += 1
-
-        while pending:
-            done_futures, _ = wait(pending, return_when=FIRST_COMPLETED)
-            for future in done_futures:
-                pending.pop(future)
-                rows = [
-                    format_result_for_output(row, record_reversed_as_original)
-                    for row in future.result()
-                ]
-                for row in rows:
-                    append_row(out_path, row)
-                completed += len(rows)
-
-                while submitted_groups < len(groups) and len(pending) < max_pending:
-                    group = groups[submitted_groups]
-                    next_future = executor.submit(
-                        compute_x_group_with_timeout,
-                        group,
-                        task_timeout,
-                    )
-                    pending[next_future] = group
-                    submitted_groups += 1
-
-            now = time.time()
-            if completed == len(tasks) or completed % 25 == 0 or now - last_log >= 60:
-                rate = completed / max(now - start, 0.001)
-                eta = (len(tasks) - completed) / max(rate, 0.001)
-                log_line(
-                    log_path,
-                    f"done {completed}/{len(tasks)} groups={submitted_groups}/{len(groups)} "
-                    f"rate={rate:.2f}/s eta={eta/3600:.2f}h",
-                )
-                last_log = now
-
-
 def run_serial(
     tasks: Sequence[Tuple[int, str, str]],
     out_path: Path,
     log_path: Path,
     project_root: str,
     task_timeout: Optional[float] = None,
-    record_reversed_as_original: bool = False,
 ) -> None:
     init_worker(project_root)
     if task_timeout:
@@ -644,10 +465,7 @@ def run_serial(
         finally:
             if task_timeout:
                 signal.setitimer(signal.ITIMER_REAL, 0)
-        append_row(
-            out_path,
-            format_result_for_output(row, record_reversed_as_original),
-        )
+        append_row(out_path, row)
         now = time.time()
         if completed == len(tasks) or completed % 25 == 0 or now - last_log >= 60:
             rate = completed / max(now - start, 0.001)
@@ -677,32 +495,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Maximum seconds per task; timed-out tasks are checkpointed and skipped.",
     )
     parser.add_argument(
-        "--timeout-artifact-dir",
-        default=None,
-        help=(
-            "Directory for JSON snapshots of the last completed W/X branch "
-            "states. With --task-timeout, the default is <out-stem>_timeout_states."
-        ),
-    )
-    parser.add_argument(
         "--task-order",
-        choices=["by-x-cache", "round-robin", "by-index"],
-        default="by-x-cache",
-        help="Use by-x-cache to reuse lazy X reductions within each worker.",
-    )
-    parser.add_argument(
-        "--x-cache-chunk",
-        type=int,
-        default=32,
-        help="Maximum same-X tasks assigned together to one cache-owning worker.",
-    )
-    parser.add_argument(
-        "--record-reversed-as-original",
-        action="store_true",
-        help=(
-            "Tasks are computed as <X,W>, but output rows are stored using the "
-            "original <W,X> word order with an explicit warning."
-        ),
+        choices=["round-robin", "by-index"],
+        default="round-robin",
+        help="Use round-robin to avoid all workers starting inside the same hard representative block.",
     )
     return parser.parse_args(argv)
 
@@ -713,16 +509,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     log_path = Path(args.log).expanduser().resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    timeout_artifact_dir: Optional[Path] = None
-    if args.task_timeout:
-        if args.timeout_artifact_dir:
-            timeout_artifact_dir = Path(args.timeout_artifact_dir).expanduser().resolve()
-        else:
-            timeout_artifact_dir = out_path.parent / f"{out_path.stem}_timeout_states"
-        timeout_artifact_dir.mkdir(parents=True, exist_ok=True)
-        os.environ["PROBLEM3_TIMEOUT_ARTIFACT_DIR"] = str(timeout_artifact_dir)
-    else:
-        os.environ.pop("PROBLEM3_TIMEOUT_ARTIFACT_DIR", None)
 
     if args.task_file:
         tasks = load_task_file(Path(args.task_file).expanduser().resolve(), args.limit)
@@ -730,23 +516,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         tasks = build_tasks(args.project_root, args.start_index, args.end_index, args.limit)
     if args.task_order == "round-robin":
         tasks = round_robin_by_w(tasks)
-    elif args.task_order == "by-x-cache":
-        tasks = sorted(tasks, key=lambda task: (task[2], task[0], task[1]))
     done_pairs = completed_pairs(out_path)
-    def stored_pair(task: Tuple[int, str, str]) -> Tuple[str, str]:
-        if args.record_reversed_as_original:
-            return task[2], task[1]
-        return task[1], task[2]
-
-    todo = [task for task in tasks if stored_pair(task) not in done_pairs]
+    todo = [task for task in tasks if (task[1], task[2]) not in done_pairs]
 
     log_line(
         log_path,
         f"pid={os.getpid()} project_root={Path(args.project_root).expanduser()} "
         f"tasks={len(tasks)} completed={len(done_pairs)} remaining={len(todo)} workers={args.workers} "
-        f"app_dir={GITHUB_APP_DIR} engine_dir={ENGINE_DIR} mode=value_only "
-        f"record_reversed_as_original={args.record_reversed_as_original} "
-        f"timeout_artifact_dir={timeout_artifact_dir or ''}",
+        f"app_dir={GITHUB_APP_DIR} engine_dir={ENGINE_DIR} mode=value_only",
     )
     print(f"remaining tasks: {len(todo)}", flush=True)
     print(f"output: {out_path}", flush=True)
@@ -755,36 +532,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
 
     if args.workers <= 1:
-        run_serial(
-            todo,
-            out_path,
-            log_path,
-            args.project_root,
-            args.task_timeout,
-            args.record_reversed_as_original,
-        )
+        run_serial(todo, out_path, log_path, args.project_root, args.task_timeout)
     else:
-        if args.task_order == "by-x-cache":
-            run_parallel_grouped_by_x(
-                todo,
-                out_path,
-                log_path,
-                args.project_root,
-                args.workers,
-                args.task_timeout,
-                args.x_cache_chunk,
-                args.record_reversed_as_original,
-            )
-        else:
-            run_parallel(
-                todo,
-                out_path,
-                log_path,
-                args.project_root,
-                args.workers,
-                args.task_timeout,
-                args.record_reversed_as_original,
-            )
+        run_parallel(todo, out_path, log_path, args.project_root, args.workers, args.task_timeout)
 
     log_line(log_path, "finished")
     return 0
