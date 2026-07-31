@@ -26,7 +26,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, MutableMapping, Optional, Set, Tuple
 
-import web_relation_rules_optimized_20260726 as relation_rules
+import web_relation_rules_0714_2 as relation_rules
 
 
 Adjacency = Dict[int, Any]
