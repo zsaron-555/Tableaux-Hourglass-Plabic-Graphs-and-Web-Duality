@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import Wrench_or_Skein_0714 as wrench
-import web_relation_rules_optimized_20260726.py as relation_rules
+import web_relation_rules_optimized_20260726 as relation_rules
 
 
 APP_DIR = Path(__file__).resolve().parent
