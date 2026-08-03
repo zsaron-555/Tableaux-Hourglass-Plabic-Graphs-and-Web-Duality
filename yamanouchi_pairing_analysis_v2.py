@@ -225,8 +225,12 @@ def print_triples(title, triples):
     if not triples:
         print("  (none)")
     else:
+        prev_w = None
         for w, x, v in triples:
+            if prev_w is not None and w != prev_w:
+                print()
             print("  ({}, {}, {})".format(w, x, v))
+            prev_w = w
     print("Total: {}".format(len(triples)))
     print()
 
