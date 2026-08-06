@@ -7,6 +7,13 @@
     "case": "additional_zero_1",
     "region": "case 1 and its variable-gap generalization"
   },
+  "interpretation": {
+    "blue_edge_ids_by_side": {"W": ["h1", "h2", "h3"], "X": []},
+    "blue_edge_rule": "exactly_one_blue_edge_is_hourglass",
+    "boundary_leg_edge_ids_by_side": {"W": ["e1", "e2", "e3"], "X": ["e1", "e2", "e3"]},
+    "boundary_leg_rule": "ordinary_edges_terminate_at_black_disk_boundary_vertices",
+    "outside_incidence": "unrestricted"
+  },
   "matching": {
     "same_boundary_interval": true,
     "allow_disk_rotation": true,
@@ -25,6 +32,9 @@
   "W": {
     "boundary_order": ["b1", "b2", "b3"],
     "ports": ["p1"],
+    "constraints": [
+      {"type": "exact_edge_kind_count", "edge_ids": ["h1", "h2", "h3"], "kind": "hourglass", "count": 1}
+    ],
     "nodes": [
       {"id": "b1", "role": "disk_boundary", "color": "black", "x": -1.0, "y": 0.0},
       {"id": "b2", "role": "disk_boundary", "color": "black", "x": -0.5, "y": -0.1},

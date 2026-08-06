@@ -501,6 +501,56 @@ def _pattern_web_parts(pattern_web: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _paired_pattern_required_graph_connected(pattern: Dict[str, Any]) -> bool:
+    """Return whether the required paired configuration is connected.
+
+    Connectivity is tested after the W and X boundary vertices in the same
+    positions of the local boundary window are identified.  External ports
+    and all ambient incidences not drawn in the pattern are irrelevant.
+    """
+    w_parts = _pattern_web_parts(pattern["W"])
+    x_parts = _pattern_web_parts(pattern["X"])
+    if len(w_parts["boundary"]) != len(x_parts["boundary"]):
+        return False
+
+    adjacency: Dict[Tuple[str, Any], Set[Tuple[str, Any]]] = {}
+
+    def add_side(side: str, parts: Dict[str, Any]) -> None:
+        boundary_positions = {
+            node_id: position
+            for position, node_id in enumerate(parts["boundary"])
+        }
+
+        def merged_node(node_id: str) -> Tuple[str, Any]:
+            if node_id in boundary_positions:
+                return ("boundary", boundary_positions[node_id])
+            return (side, node_id)
+
+        for node_id in parts["nonports"]:
+            adjacency.setdefault(merged_node(node_id), set())
+        for u, v in parts["allowed_relations"]:
+            merged_u = merged_node(u)
+            merged_v = merged_node(v)
+            adjacency.setdefault(merged_u, set()).add(merged_v)
+            adjacency.setdefault(merged_v, set()).add(merged_u)
+
+    add_side("W", w_parts)
+    add_side("X", x_parts)
+    if not adjacency:
+        return False
+
+    start = next(iter(adjacency))
+    reached = {start}
+    stack = [start]
+    while stack:
+        node = stack.pop()
+        for neighbor in adjacency[node]:
+            if neighbor not in reached:
+                reached.add(neighbor)
+                stack.append(neighbor)
+    return len(reached) == len(adjacency)
+
+
 def _cyclic_interval(start: int, size: int, boundary_count: int, reflected: bool) -> List[int]:
     step = -1 if reflected else 1
     return [((start - 1 + step * offset) % boundary_count) + 1 for offset in range(size)]
@@ -693,33 +743,16 @@ def _match_pattern_side(
 
     def relation_ok(pnode: str, actual: int, other_pnode: str, other_actual: int) -> bool:
         expected = _pattern_allowed_relations(parts, pnode, other_pnode)
-        present = _actual_relation(graph_parts, actual, other_actual)
-        if expected:
-            return present in expected
-        return present is None
+        if not expected:
+            # Lemma 4.9 asks for the displayed orange graph as a subgraph, not
+            # as an induced subgraph. Additional edges between mapped vertices
+            # therefore do not invalidate an otherwise valid match.
+            return True
+        return _actual_relation(graph_parts, actual, other_actual) in expected
 
     def final_checks() -> bool:
-        mapped_nonports = set(mapping.values())
-        for pnode in parts["nonports"]:
-            actual = mapping[pnode]
-            local_neighbors = {
-                mapping[other]
-                for other in parts["nonports"]
-                if other != pnode
-                and _pattern_allowed_relations(parts, pnode, other)
-            }
-            actual_local_neighbors = (
-                graph_parts["ordinary_adj"].get(actual, set())
-                | graph_parts["hourglass_adj"].get(actual, set())
-            ) & mapped_nonports
-            if actual_local_neighbors != local_neighbors:
-                return False
-            outside_ordinary = graph_parts["ordinary_adj"].get(actual, set()) - mapped_nonports
-            if outside_ordinary & graph_parts["boundary_nodes"]:
-                return False
-            outside_hourglass = graph_parts["hourglass_adj"].get(actual, set()) - mapped_nonports
-            if outside_hourglass:
-                return False
+        # Do not inspect incidences outside the displayed orange subgraph.
+        # Required edge kinds and colors were checked during backtracking.
         return _pattern_constraints_ok(parts, mapping, graph_parts)
 
     def backtrack(index: int, used: Set[int]) -> None:
@@ -814,6 +847,8 @@ def compiled_sl4_lemma49_pattern_catalog() -> Tuple[Dict[str, Any], ...]:
     """Parse and index the immutable pattern sides once per process."""
     compiled: List[Dict[str, Any]] = []
     for pattern in sl4_lemma49_zero_rule_catalog():
+        if not _paired_pattern_required_graph_connected(pattern):
+            continue
         item = dict(pattern)
         item["_compiled_W"] = _compile_pattern_side(pattern["W"])
         item["_compiled_X"] = _compile_pattern_side(pattern["X"])
@@ -928,37 +963,15 @@ def _match_compiled_pattern_side(
         other_actual: int,
     ) -> bool:
         expected = _pattern_allowed_relations(parts, pnode, other_pnode)
-        present = _actual_relation(graph_parts, actual, other_actual)
-        if expected:
-            return present in expected
-        return present is None
+        if not expected:
+            # Match a possibly non-induced subgraph: extra relations among
+            # mapped vertices are allowed.
+            return True
+        return _actual_relation(graph_parts, actual, other_actual) in expected
 
     def final_checks() -> bool:
-        mapped_nonports = set(mapping.values())
-        for pnode in parts["nonports"]:
-            actual = mapping[pnode]
-            local_neighbors = {
-                mapping[other]
-                for other in parts["nonports"]
-                if other != pnode
-                and _pattern_allowed_relations(parts, pnode, other)
-            }
-            actual_local_neighbors = (
-                graph_parts["ordinary_adj"].get(actual, set())
-                | graph_parts["hourglass_adj"].get(actual, set())
-            ) & mapped_nonports
-            if actual_local_neighbors != local_neighbors:
-                return False
-            outside_ordinary = (
-                graph_parts["ordinary_adj"].get(actual, set()) - mapped_nonports
-            )
-            if outside_ordinary & graph_parts["boundary_nodes"]:
-                return False
-            outside_hourglass = (
-                graph_parts["hourglass_adj"].get(actual, set()) - mapped_nonports
-            )
-            if outside_hourglass:
-                return False
+        # Outside ordinary edges and hourglasses are irrelevant. The orange
+        # configuration need only occur as a subgraph.
         return _pattern_constraints_ok(parts, mapping, graph_parts)
 
     def backtrack(index: int, used: Set[int]) -> None:
@@ -1153,13 +1166,12 @@ def detect_sl4_lemma49_zero_pair(
 
     This does not consult survivor TSV files.  It searches the actual W and X
     graph data for the paired local JSON snippets in
-    ``sl4_lemma49_zero_patterns/``.  The drawn windows are interpreted as
-    local window patterns: required internal edges and hourglasses must be
-    present, ordinary strands may leave the window through the open ports, but
-    a matched internal vertex is not allowed to attach to an unhighlighted
-    boundary vertex outside the claimed boundary interval.  This prevents a
-    smaller Lemma 4.9 picture from being falsely embedded across a larger
-    boundary configuration.
+    ``sl4_lemma49_zero_patterns/``. The drawn orange configuration is matched
+    as a subgraph: its required colors, ordinary edges, hourglasses, boundary
+    order, and explicit edge-kind constraints must be present. Any additional
+    incidences outside that subgraph are unrestricted.  The required W/X
+    configuration must be connected after corresponding boundary vertices are
+    identified.
     """
     w_parts = _actual_graph_parts(w_graph)
     x_parts = _actual_graph_parts(x_graph)
@@ -1169,6 +1181,8 @@ def detect_sl4_lemma49_zero_pair(
 
     found: List[Dict[str, Any]] = []
     for pattern in sl4_lemma49_zero_rule_catalog():
+        if not _paired_pattern_required_graph_connected(pattern):
+            continue
         matching = pattern.get("matching", {})
         allow_reflection = bool(matching.get("allow_reflection", False))
         allow_swap = bool(matching.get("allow_pair_swap", False))
