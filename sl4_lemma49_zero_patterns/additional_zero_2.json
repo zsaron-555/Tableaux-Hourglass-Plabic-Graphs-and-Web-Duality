@@ -7,6 +7,13 @@
     "case": "additional_zero_2",
     "region": "case 2"
   },
+  "interpretation": {
+    "blue_edge_ids_by_side": {"W": ["h1", "h2"], "X": []},
+    "blue_edge_rule": "exactly_one_blue_edge_is_hourglass",
+    "boundary_leg_edge_ids_by_side": {"W": ["e1", "e2", "e3", "e4"], "X": ["e1", "e2", "e3", "e4"]},
+    "boundary_leg_rule": "ordinary_edges_terminate_at_black_disk_boundary_vertices",
+    "outside_incidence": "unrestricted"
+  },
   "matching": {
     "same_boundary_interval": true,
     "allow_disk_rotation": true,

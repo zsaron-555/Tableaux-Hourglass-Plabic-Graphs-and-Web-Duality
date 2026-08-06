@@ -27,7 +27,7 @@ ALL_FOLDER_NAME = "hourglass_disk_4x4_all_graph_data"
 ALL_FOLDER_ALIASES = (ALL_FOLDER_NAME, "4x4_All_graph_data")
 SURVIVOR_CSV_NAME = "lemma46_survivors.csv"
 PROMOTION_TABLE_PATH = Path("hourglass_disk_4x4_promotion_reps") / "promotion_orbits_4x4.tsv"
-IMAGE_EXPLORER_HTML_NAME = "web_explorer_v3.html"
+IMAGE_EXPLORER_HTML_NAME = "web_explorer_v4 (1).html"
 REP_IMAGE_FOLDER_NAME = "hourglass_disk_4x4_promotion_reps"
 PROJECT_ROOT = Path(os.environ.get("PROBLEM3_ROOT", APP_DIR)).expanduser().resolve()
 X_DIR = PROJECT_ROOT / X_FOLDER_NAME
@@ -750,6 +750,8 @@ def image_explorer_page() -> str:
             """,
         )
     text = IMAGE_EXPLORER_HTML.read_text(encoding="utf-8")
+    if "<base " not in text and "<head>" in text:
+        text = text.replace("<head>", '<head>\n<base href="/">', 1)
     nav = """
     <div style="margin:0 0 14px 0;padding:10px 12px;background:#eef5ff;border:1px solid #cbd8ea;border-radius:6px;font-family:Arial,Helvetica,sans-serif;font-size:14px">
       <a href="/" style="color:#17202a;font-weight:bold;text-decoration:none">Wrench Pairing Explorer</a>
