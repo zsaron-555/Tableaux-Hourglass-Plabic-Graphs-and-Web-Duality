@@ -1,5 +1,25 @@
 # SL4 Lemma 4.9 zero-pair patterns
 
+## Additional zero-pairing drawings
+
+The six `additional_zero_*.json` files follow the drawings in
+`Additional Zero Pairings.pdf` literally:
+
+- The edges listed in `interpretation.blue_edge_ids_by_side` are the blue
+  edges in the source drawing. Exactly one of those edges is an hourglass;
+  all remaining blue edges are ordinary.
+- Every edge listed in `interpretation.boundary_leg_edge_ids_by_side` is an
+  ordinary edge ending at a black `disk_boundary` vertex. Such a leg may not
+  be matched to an internal black vertex.
+- Additional edges or hourglasses incident to matched local vertices are not
+  restricted unless the pattern says otherwise.
+- Disk rotations, reflections, and the allowed W/X side swap are handled by
+  the matcher; they are not duplicated as separate JSON files.
+
+Case 6 is explicitly described in the source as already covered by the case 4
+generalization. Its JSON therefore records the same local topology and marks
+the alias in `interpretation.alias_of`.
+
 This directory transcribes the blue-boxed candidate SL4 analogues in
 `Lem 4.9 abefghi (1).pdf`.
 

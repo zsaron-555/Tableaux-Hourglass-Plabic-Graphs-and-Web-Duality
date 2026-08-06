@@ -413,6 +413,55 @@ def _pattern_web_parts(pattern_web: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _paired_pattern_required_graph_connected(pattern: Dict[str, Any]) -> bool:
+    """Test connectivity of the required W/X pattern after boundary gluing.
+
+    External ports and ambient edges or hourglasses not required by the
+    pattern are intentionally ignored.
+    """
+    w_parts = _pattern_web_parts(pattern["W"])
+    x_parts = _pattern_web_parts(pattern["X"])
+    if len(w_parts["boundary"]) != len(x_parts["boundary"]):
+        return False
+
+    adjacency: Dict[Tuple[str, Any], Set[Tuple[str, Any]]] = {}
+
+    def add_side(side: str, parts: Dict[str, Any]) -> None:
+        positions = {
+            node_id: position
+            for position, node_id in enumerate(parts["boundary"])
+        }
+
+        def merged_node(node_id: str) -> Tuple[str, Any]:
+            if node_id in positions:
+                return ("boundary", positions[node_id])
+            return (side, node_id)
+
+        for node_id in parts["nonports"]:
+            adjacency.setdefault(merged_node(node_id), set())
+        for u, v in parts["ordinary"] | parts["hourglass"]:
+            merged_u = merged_node(u)
+            merged_v = merged_node(v)
+            adjacency.setdefault(merged_u, set()).add(merged_v)
+            adjacency.setdefault(merged_v, set()).add(merged_u)
+
+    add_side("W", w_parts)
+    add_side("X", x_parts)
+    if not adjacency:
+        return False
+
+    start = next(iter(adjacency))
+    reached = {start}
+    stack = [start]
+    while stack:
+        node = stack.pop()
+        for neighbor in adjacency[node]:
+            if neighbor not in reached:
+                reached.add(neighbor)
+                stack.append(neighbor)
+    return len(reached) == len(adjacency)
+
+
 def _cyclic_interval(start: int, size: int, boundary_count: int, reflected: bool) -> List[int]:
     step = -1 if reflected else 1
     return [((start - 1 + step * offset) % boundary_count) + 1 for offset in range(size)]
@@ -512,34 +561,13 @@ def _match_pattern_side(
         present = _actual_relation(graph_parts, actual, other_actual)
         if expected is not None:
             return present == expected
-        return present is None
+        # The orange configuration is a subgraph, not an induced subgraph.
+        # Additional relations between mapped vertices are allowed.
+        return True
 
     def final_checks() -> bool:
-        mapped_nonports = set(mapping.values())
-        for pnode in parts["nonports"]:
-            actual = mapping[pnode]
-            local_ordinary = {
-                mapping[other]
-                for other in parts["nonports"]
-                if other != pnode and _pattern_relation(parts, pnode, other) == "ordinary"
-            }
-            actual_local_ordinary = graph_parts["ordinary_adj"].get(actual, set()) & mapped_nonports
-            if actual_local_ordinary != local_ordinary:
-                return False
-            local_hourglass = {
-                mapping[other]
-                for other in parts["nonports"]
-                if other != pnode and _pattern_relation(parts, pnode, other) == "hourglass"
-            }
-            actual_local_hourglass = graph_parts["hourglass_adj"].get(actual, set()) & mapped_nonports
-            if actual_local_hourglass != local_hourglass:
-                return False
-            outside_ordinary = graph_parts["ordinary_adj"].get(actual, set()) - mapped_nonports
-            if outside_ordinary & graph_parts["boundary_nodes"]:
-                return False
-            outside_hourglass = graph_parts["hourglass_adj"].get(actual, set()) - mapped_nonports
-            if outside_hourglass:
-                return False
+        # Once every required colored vertex and displayed edge has matched,
+        # incidences outside the orange subgraph are irrelevant.
         return True
 
     def backtrack(index: int, used: Set[int]) -> None:
@@ -595,12 +623,10 @@ def detect_sl4_lemma49_zero_pair(
     This does not consult survivor TSV files.  It searches the actual W and X
     graph data for the paired local JSON snippets in
     ``sl4_lemma49_zero_patterns/``.  The drawn windows are interpreted as
-    local window patterns: required internal edges and hourglasses must be
-    present, ordinary strands may leave the window through the open ports, but
-    a matched internal vertex is not allowed to attach to an unhighlighted
-    boundary vertex outside the claimed boundary interval.  This prevents a
-    smaller Lemma 4.9 picture from being falsely embedded across a larger
-    boundary configuration.
+    subgraph patterns: every displayed colored vertex, ordinary edge, and
+    hourglass must be present in the prescribed cyclic boundary order.  The
+    required W/X configuration must be connected after boundary gluing.  Any
+    additional incidence outside the displayed orange subgraph is allowed.
     """
     w_parts = _actual_graph_parts(w_graph)
     x_parts = _actual_graph_parts(x_graph)
@@ -610,6 +636,8 @@ def detect_sl4_lemma49_zero_pair(
 
     found: List[Dict[str, Any]] = []
     for pattern in sl4_lemma49_zero_rule_catalog():
+        if not _paired_pattern_required_graph_connected(pattern):
+            continue
         matching = pattern.get("matching", {})
         allow_reflection = bool(matching.get("allow_reflection", False))
         allow_swap = bool(matching.get("allow_pair_swap", False))

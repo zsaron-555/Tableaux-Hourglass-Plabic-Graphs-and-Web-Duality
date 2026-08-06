@@ -27,6 +27,22 @@
   .side-panel .info { font-size: 11px; color: #555; margin-top: 6px; line-height: 1.7; }
   .star-label { color: #8e44ad; font-weight: bold; }
 
+  .surgery-panel { border: 2px solid #168a5b; background: #f3fbf7; padding: 8px;
+                   box-sizing: border-box; }
+  .surgery-panel h3 { color: #126b48; }
+  .surgery-intro { font-size: 10px; color: #587267; line-height: 1.45; margin-bottom: 8px; }
+  .surgery-card { border-top: 1px solid #b9d9ca; padding: 8px 0 4px; }
+  .surgery-card:first-of-type { border-top: 0; padding-top: 0; }
+  .surgery-card img { border-color: #168a5b; }
+  .surgery-channel { font-size: 11px; font-weight: bold; color: #126b48; margin-bottom: 4px; }
+  .surgery-word { display: inline-block; color: #126b48; font-weight: bold; text-decoration: underline;
+                  cursor: pointer; font-size: 11px; margin: 2px 0; }
+  .surgery-word:hover { color: #0b4d34; }
+  .surgery-note { font-size: 10px; color: #687c73; line-height: 1.45; }
+  .surgery-uncertified { border: 1px dashed #c99a25; background: #fffaf0; padding: 6px; }
+  .surgery-back { margin: 0 0 8px; background: #126b48; }
+  .surgery-back:hover { background: #0b4d34; }
+
   .survivors-panel { flex: 1; }
   .legend { font-size: 11px; color: #777; margin-bottom: 8px; line-height: 2; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px,1fr)); gap: 10px; }
@@ -90,6 +106,13 @@
       <img id="wImg" src="" alt="W">
       <div class="info" id="wInfo"></div>
     </div>
+    <!-- Benzene surgery channels for the exact queried W -->
+    <div class="side-panel surgery-panel" id="surgeryPanel" style="display:none">
+      <h3>Benzene surgery</h3>
+      <button id="backToOriginalButton" class="surgery-back" style="display:none" onclick="returnToOriginalWeb()">Back to original web</button>
+      <div class="surgery-intro">Certified surgery outputs are shown from the stored surgery reports. Click a certified word to look up that exact web.</div>
+      <div id="surgeryList"></div>
+    </div>
     <!-- W* -->
     <div class="side-panel transpose-panel" id="wtPanel" style="display:none">
       <h3><span class="star-label">W*</span> &nbsp;<span style="font-size:11px;color:#888;font-weight:normal">(transpose)</span></h3>
@@ -116,12 +139,341 @@ const W2RK    = {"1111222233334444": [1, 0, "1234123412341234", 1522, 1], "11122
 
 const byIdx  = {};
 const byWord = {};
-REP_DATA.forEach(function(d) { byIdx[d.idx] = d; byWord[d.rep_word] = d; });
+const repForWord = {};
+let surgeryReturnWord = null;
+REP_DATA.forEach(function(d) {
+  byIdx[d.idx] = d;
+  byWord[d.rep_word] = d;
+  d.orbit_words.forEach(function(word) { repForWord[word] = d; });
+});
 
 const IMG_DIR = "hourglass_disk_4x4_promotion_reps";
+const GRAPH_DIR = "4x4_All_graph_data";
+const EMPTY_PIXEL = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
+const graphCache = new Map();
+const completionMemo = new Map();
+let renderGeneration = 0;
+
+// These are the surgery channels recorded in
+// output/tsv/benzene_surgery_support_table_all_benzene_W.tsv.  A null word
+// means the structural surgery was recorded but was not certified as a
+// Yamanouchi word by the current ribbon-graph matcher.
+const BENZENE_SURGERY = {
+  "1111223223443344": [
+    { channel: "direct", word: null, note: "A surgery presentation is stored, but it has no certified catalogue Yamanouchi word yet." },
+  ],
+  "1111223223443434": [
+    { channel: "direct", word: null, note: "A surgery presentation is stored, but it has no certified catalogue Yamanouchi word yet." },
+  ],
+  "1111223322344344": [
+    { channel: "direct", word: null, note: "A surgery presentation is stored, but it has no certified catalogue Yamanouchi word yet." },
+  ],
+  "1111223322344434": [
+    { channel: "direct", word: null, note: "A surgery presentation is stored, but it has no certified catalogue Yamanouchi word yet." },
+    { channel: "chain reaction", word: "1121324312344234", transpose: "1213121243323444" },
+  ],
+  "1111223324234434": [
+    { channel: "direct", word: "1121324314234234", transpose: "1213121242333444" },
+  ],
+  "1111223342234434": [
+    { channel: "direct", word: "1121324341234234", transpose: "1213121224333444" },
+  ],
+  "1111223432234434": [
+    { channel: "direct", word: "1121323441234234", transpose: "1213122124333444" },
+  ],
+  "1111232223434434": [
+    { channel: "direct", word: null, note: "A surgery presentation is stored, but it has no certified catalogue Yamanouchi word yet." },
+    { channel: "chain reaction", word: "1112341223434234", transpose: "1231114232233444" },
+  ],
+  "1111232223443434": [
+    { channel: "direct", word: null, note: "A surgery presentation is stored, but it has no certified catalogue Yamanouchi word yet." },
+    { channel: "chain reaction", word: "1112342123423434", transpose: "1231112432243344" },
+  ],
+  "1111232232434434": [
+    { channel: "direct", word: null, note: "A surgery presentation is stored, but it has no certified catalogue Yamanouchi word yet." },
+    { channel: "chain reaction", word: "1112341232434234", transpose: "1231114223233444" },
+  ],
+  "1111232232443434": [
+    { channel: "direct", word: null, note: "A surgery presentation is stored, but it has no certified catalogue Yamanouchi word yet." },
+  ],
+  "1111232234234434": [
+    { channel: "direct", word: "1121342134234234", transpose: "1213112422333444" },
+    { channel: "chain reaction", word: "1112341234234234", transpose: "1231114222333444" },
+  ],
+  "1111232234243344": [
+    { channel: "direct", word: null, note: "A surgery presentation is stored, but it has no certified catalogue Yamanouchi word yet." },
+  ],
+  "1111232234243434": [
+    { channel: "direct", word: null, note: "A surgery presentation is stored, but it has no certified catalogue Yamanouchi word yet." },
+  ],
+  "1111232234423344": [
+    { channel: "direct", word: "1112341234223344", transpose: "1231114222343434" },
+  ],
+  "1111232234423434": [
+    { channel: "direct", word: "1112341234223434", transpose: "1231114222343344" },
+  ],
+  "1111232234432344": [
+    { channel: "direct", word: "1112341234232344", transpose: "1231114222334434" },
+  ],
+  "1111232234434234": [
+    { channel: "direct", word: "1112341234234234", transpose: "1231114222333444" },
+  ],
+  "1111232322344344": [
+    { channel: "direct", word: null, note: "A surgery presentation is stored, but it has no certified catalogue Yamanouchi word yet." },
+  ],
+  "1111232322434434": [
+    { channel: "direct", word: null, note: "A surgery presentation is stored, but it has no certified catalogue Yamanouchi word yet." },
+  ],
+  "1111232324234434": [
+    { channel: "direct", word: "1121342314234234", transpose: "1213112242333444" },
+  ],
+  "1111232342234434": [
+    { channel: "direct", word: "1121342341234234", transpose: "1213112224333444" },
+  ],
+  "1111234232234434": [
+    { channel: "direct", word: "1121234341234234", transpose: "1213211224333444" },
+  ],
+  "1112123223443434": [
+    { channel: "direct", word: "1112234123423434", transpose: "1231211432243344" },
+  ],
+  "1112123342234434": [
+    { channel: "direct", word: "1123124341234234", transpose: "1211321224333444" },
+  ],
+  "1112132232434434": [
+    { channel: "direct", word: null, note: "A surgery presentation is stored, but it has no certified catalogue Yamanouchi word yet." },
+  ],
+  "1112132234234434": [
+    { channel: "direct", word: "1123142134234234", transpose: "1211312422333444" },
+  ],
+  "1112132322434434": [
+    { channel: "direct", word: null, note: "A surgery presentation is stored, but it has no certified catalogue Yamanouchi word yet." },
+  ],
+  "1112132324234434": [
+    { channel: "direct", word: "1123142314234234", transpose: "1211312242333444" },
+  ],
+  "1112132342234434": [
+    { channel: "direct", word: "1123142341234234", transpose: "1211312224333444" },
+  ],
+  "1112134232234434": [
+    { channel: "direct", word: "1112234341234234", transpose: "1231211224333444" },
+  ],
+  "1112232134423434": [
+    { channel: "direct", word: null, note: "A surgery presentation is stored, but it has no certified catalogue Yamanouchi word yet." },
+  ],
+  "1112312223434434": [
+    { channel: "direct", word: null, note: "A surgery presentation is stored, but it has no certified catalogue Yamanouchi word yet." },
+  ],
+  "1112312232434434": [
+    { channel: "direct", word: null, note: "A surgery presentation is stored, but it has no certified catalogue Yamanouchi word yet." },
+  ],
+  "1112312234234434": [
+    { channel: "direct", word: "1123412134234234", transpose: "1211132422333444" },
+  ],
+  "1112312324234434": [
+    { channel: "direct", word: "1123412314234234", transpose: "1211132242333444" },
+  ],
+  "1112312342234434": [
+    { channel: "direct", word: "1123412341234234", transpose: "1211132224333444" },
+  ],
+  "1112314232234434": [
+    { channel: "direct", word: "1112324341234234", transpose: "1231121224333444" },
+  ],
+  "1112321234234434": [
+    { channel: "direct", word: "1123411234234234", transpose: "1211134222333444" },
+  ],
+  "1231121243323444": [
+    { channel: "chain reaction", word: "1234121233412344", transpose: "1111223323244434" },
+  ],
+};
 
 function imgPath(rep_idx, rep_word) {
   return IMG_DIR + "/" + String(rep_idx).padStart(4,"0") + "_" + rep_word + ".png";
+}
+
+// The graph-data folder is indexed by the complete 24,024-word order, not by
+// promotion orbit.  This lets the page render the exact word the user entered.
+function canAppend(counts, letter) {
+  return letter >= 0 && letter < 4 &&
+    counts[letter] < 4 &&
+    (letter === 0 || counts[letter] < counts[letter - 1]);
+}
+
+function countCompletions(counts) {
+  const key = counts.join(",");
+  if (completionMemo.has(key)) return completionMemo.get(key);
+  if (counts[0] === 4 && counts[1] === 4 && counts[2] === 4 && counts[3] === 4) {
+    completionMemo.set(key, 1);
+    return 1;
+  }
+  let total = 0;
+  for (let letter = 0; letter < 4; letter++) {
+    if (!canAppend(counts, letter)) continue;
+    const next = counts.slice();
+    next[letter]++;
+    total += countCompletions(next);
+  }
+  completionMemo.set(key, total);
+  return total;
+}
+
+function sourceIndexForWord(word) {
+  if (!/^[1-4]{16}$/.test(word)) return null;
+  const counts = [0, 0, 0, 0];
+  let rank = 1;
+  for (const ch of word) {
+    const letter = Number(ch) - 1;
+    for (let smaller = 0; smaller < letter; smaller++) {
+      if (!canAppend(counts, smaller)) continue;
+      const next = counts.slice();
+      next[smaller]++;
+      rank += countCompletions(next);
+    }
+    if (!canAppend(counts, letter)) return null;
+    counts[letter]++;
+  }
+  return rank;
+}
+
+function graphPath(word) {
+  const index = sourceIndexForWord(word);
+  return index === null ? null :
+    GRAPH_DIR + "/" + String(index).padStart(5, "0") + "_" + word + ".json";
+}
+
+function escapeSvg(value) {
+  return String(value).replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+}
+
+function graphPoint(node, cx, cy, scale) {
+  return [cx + Number(node.x) * scale, cy - Number(node.y) * scale];
+}
+
+function routeWithEndpoints(edge, src, dst) {
+  const route = Array.isArray(edge.route) ? edge.route.slice() : [];
+  const first = route[0];
+  const last = route[route.length - 1];
+  if (!first || first[0] !== src.x || first[1] !== src.y) route.unshift([src.x, src.y]);
+  if (!last || last[0] !== dst.x || last[1] !== dst.y) route.push([dst.x, dst.y]);
+  return route;
+}
+
+function graphToSvg(graph) {
+  const size = 360;
+  const cx = size / 2;
+  const cy = size / 2;
+  const scale = 132;
+  const nodes = {};
+  (graph.nodes || []).forEach(function(node) { nodes[node.id] = node; });
+  const point = function(node) { return graphPoint(node, cx, cy, scale); };
+  const pathLine = function(points) {
+    return "M " + points.map(function(p) {
+      const q = point({x:p[0], y:p[1]});
+      return q[0].toFixed(2) + " " + q[1].toFixed(2);
+    }).join(" L ");
+  };
+  let svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 " + size + " " + size + "' width='" + size + "' height='" + size + "'>";
+  svg += "<rect width='100%' height='100%' fill='white'/>";
+  svg += "<circle cx='" + cx + "' cy='" + cy + "' r='" + scale + "' fill='none' stroke='#111' stroke-width='1.8'/>";
+
+  (graph.edges || []).forEach(function(edge) {
+    const src = nodes[edge.src];
+    const dst = nodes[edge.dst];
+    if (!src || !dst) return;
+    const p0 = point(src);
+    const p1 = point(dst);
+    if (edge.kind === "hourglass") {
+      const dx = p1[0] - p0[0];
+      const dy = p1[1] - p0[1];
+      const length = Math.hypot(dx, dy) || 1;
+      const nx = -dy / length;
+      const ny = dx / length;
+      const curve = function(side) {
+        // Opposite transverse offsets at the two control points make each
+        // strand switch sides, giving the hourglass its figure-eight shape.
+        const bend = Math.max(7, Math.min(18, length * 0.28));
+        const a = [
+          p0[0] + dx * 0.28 + nx * bend * side,
+          p0[1] + dy * 0.28 + ny * bend * side
+        ];
+        const b = [
+          p0[0] + dx * 0.72 - nx * bend * side,
+          p0[1] + dy * 0.72 - ny * bend * side
+        ];
+        return "M " + p0[0].toFixed(2) + " " + p0[1].toFixed(2) +
+          " C " + a[0].toFixed(2) + " " + a[1].toFixed(2) +
+          ", " + b[0].toFixed(2) + " " + b[1].toFixed(2) +
+          ", " + p1[0].toFixed(2) + " " + p1[1].toFixed(2);
+      };
+      svg += "<path d='" + curve(1) + "' fill='none' stroke='#111' stroke-width='2.1' stroke-linecap='round'/>";
+      svg += "<path d='" + curve(-1) + "' fill='none' stroke='#111' stroke-width='2.1' stroke-linecap='round'/>";
+    } else {
+      const route = routeWithEndpoints(edge, src, dst);
+      svg += "<path d='" + pathLine(route) + "' fill='none' stroke='#111' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/>";
+    }
+  });
+
+  (graph.nodes || []).forEach(function(node) {
+    const p = point(node);
+    const boundary = node.boundary_label !== null && node.boundary_label !== undefined;
+    const radius = boundary ? 4.8 : 4.3;
+    const fill = node.color === "black" ? "#111" : "white";
+    svg += "<circle cx='" + p[0].toFixed(2) + "' cy='" + p[1].toFixed(2) +
+      "' r='" + radius + "' fill='" + fill + "' stroke='#111' stroke-width='1.5'/>";
+    if (boundary) {
+      const lx = cx + Number(node.x) * scale * 1.13;
+      const ly = cy - Number(node.y) * scale * 1.13 + 3;
+      svg += "<text x='" + lx.toFixed(2) + "' y='" + ly.toFixed(2) +
+        "' text-anchor='middle' font-family='Arial,sans-serif' font-size='10' fill='#111'>" +
+        escapeSvg(node.boundary_label) + "</text>";
+    }
+  });
+  svg += "</svg>";
+  return svg;
+}
+
+function exactGraphPromise(word) {
+  if (graphCache.has(word)) return graphCache.get(word);
+  const path = graphPath(word);
+  const promise = path
+    ? fetch(path).then(function(response) {
+        if (!response.ok) throw new Error("Graph data not found: " + path);
+        return response.json();
+      }).then(graphToSvg).then(function(svg) {
+        return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+      })
+    : Promise.reject(new Error("Invalid 4x4 Yamanouchi word."));
+  graphCache.set(word, promise);
+  return promise;
+}
+
+function queueExactImage(image, word, generation, defer) {
+  image.src = EMPTY_PIXEL;
+  image.alt = "Loading exact graph for " + word;
+  const loadExact = function() {
+    exactGraphPromise(word).then(function(dataUrl) {
+      if (generation === renderGeneration) {
+        image.src = dataUrl;
+        image.alt = "Exact graph for " + word;
+      }
+    }).catch(function() {
+      if (generation === renderGeneration) image.alt = "Exact graph unavailable for " + word;
+    });
+  };
+  if (defer && "IntersectionObserver" in window) {
+    const observer = new IntersectionObserver(function(entries, obs) {
+      entries.forEach(function(entry) {
+        if (entry.isIntersecting) {
+          obs.unobserve(entry.target);
+          loadExact();
+        }
+      });
+    }, {rootMargin: "360px"});
+    observer.observe(image);
+  } else {
+    loadExact();
+  }
 }
 
 function computeSurvivors(w_word) {
@@ -156,41 +508,149 @@ function computeSurvivors(w_word) {
   };
 }
 
+function openExactWord(word, returnWord) {
+  surgeryReturnWord = returnWord || null;
+  document.getElementById("wordInput").value = word;
+  document.getElementById("idxInput").value = "";
+  document.getElementById("quickSelect").value = "";
+  showWord(word);
+  window.scrollTo(0, 0);
+}
+
+function openSurgeryWord(word, originalWord) {
+  openExactWord(word, originalWord);
+}
+
+function returnToOriginalWeb() {
+  const originalWord = surgeryReturnWord;
+  if (!originalWord) return;
+  openExactWord(originalWord);
+}
+
+function surgeryRecordForWord(w_word) {
+  if (BENZENE_SURGERY[w_word]) {
+    return { channels: BENZENE_SURGERY[w_word], sourceWord: w_word, fallback: false };
+  }
+
+  // Surgery reports are recorded for one representative of a promotion orbit,
+  // while the explorer accepts every word in that orbit.  Use the stored
+  // representative channels but keep the exact queried word for the main web.
+  const representative = repForWord[w_word];
+  if (representative && BENZENE_SURGERY[representative.rep_word]) {
+    return {
+      channels: BENZENE_SURGERY[representative.rep_word],
+      sourceWord: representative.rep_word,
+      fallback: true,
+    };
+  }
+  return null;
+}
+
+function renderSurgeryPanel(w_word, generation) {
+  const panel = document.getElementById("surgeryPanel");
+  const list = document.getElementById("surgeryList");
+  const backButton = document.getElementById("backToOriginalButton");
+  const record = surgeryRecordForWord(w_word);
+  if (!record) {
+    list.innerHTML = "";
+    if (surgeryReturnWord) {
+      panel.style.display = "block";
+      if (backButton) backButton.style.display = "inline-block";
+      const intro = panel.querySelector(".surgery-intro");
+      if (intro) {
+        intro.textContent = "You are viewing a surgery output. Use the button above to return to the original web.";
+      }
+    } else {
+      panel.style.display = "none";
+      if (backButton) backButton.style.display = "none";
+    }
+    return;
+  }
+
+  panel.style.display = "block";
+  if (backButton) backButton.style.display = surgeryReturnWord ? "inline-block" : "none";
+  const intro = panel.querySelector(".surgery-intro");
+  if (intro) {
+    intro.textContent = record.fallback
+      ? "This exact web is in the promotion orbit of " + record.sourceWord + ". The stored surgery channels are shown below; the main web above remains the exact word you entered."
+      : "Certified surgery outputs are shown from the stored surgery reports. Click a certified word to look up that exact web.";
+  }
+  list.innerHTML = "";
+  record.channels.forEach(function(channel, index) {
+    const card = document.createElement("div");
+    card.className = channel.word ? "surgery-card" : "surgery-card surgery-uncertified";
+    const title = document.createElement("div");
+    title.className = "surgery-channel";
+    title.textContent = "Channel " + (index + 1) + ": " + channel.channel;
+    card.appendChild(title);
+
+    if (channel.word) {
+      const image = document.createElement("img");
+      image.loading = "lazy";
+      image.alt = "Surgery web " + channel.word;
+      card.appendChild(image);
+      queueExactImage(image, channel.word, generation, false);
+
+      const link = document.createElement("span");
+      link.className = "surgery-word";
+      link.textContent = "Surgery(W) = " + channel.word;
+      link.title = "Look up this exact surgery web";
+      link.onclick = function() { openSurgeryWord(channel.word, w_word); };
+      card.appendChild(link);
+
+      const transpose = document.createElement("div");
+      transpose.className = "surgery-note";
+      transpose.textContent = "(Surgery(W))^T = " + channel.transpose;
+      card.appendChild(transpose);
+    } else {
+      const note = document.createElement("div");
+      note.className = "surgery-note";
+      note.textContent = channel.note;
+      card.appendChild(note);
+    }
+    list.appendChild(card);
+  });
+}
+
 function showWord(w_word) {
   const R = computeSurvivors(w_word);
   if (!R) {
     document.getElementById("status").textContent = "Word not found in 24,024 basis words.";
     return;
   }
+  const generation = ++renderGeneration;
   const {w_rep_idx, w_k, w_rep, forks_W, t_word, t_rep_idx, t_k, t_rep, survivors} = R;
   const distinct = new Set(survivors.map(function(s){return s.x_idx;})).size;
   const t_survives = survivors.some(function(s){return s.is_transpose;});
 
   // ── W panel ──
   document.getElementById("wPanel").style.display = "block";
-  document.getElementById("wImg").src = imgPath(w_rep_idx, w_rep.rep_word);
+  queueExactImage(document.getElementById("wImg"), w_word, generation);
   document.getElementById("wInfo").innerHTML =
     "<b>Orbit " + w_rep_idx + "</b>" +
     (w_rep.self_stable ? " <span style='color:#e67e22'>[self-stable]</span>" : "") +
     "<br>Word: " + w_word +
     (w_k > 0 ? "<br><small>prom^" + w_k + " of rep " + w_rep.rep_word + "</small>" : "") +
+    "<br><small>Displayed graph: exact queried word</small>" +
     "<br>forks(W) = [" + forks_W.join(", ") + "]" +
     "<br>Pairs: <b>" + survivors.length + "</b> | Orbits: <b>" + distinct + "</b>";
+  renderSurgeryPanel(w_word, generation);
 
   // ── W* panel ──
   document.getElementById("wtPanel").style.display = "block";
   if (t_rep) {
-    document.getElementById("wtImg").src = imgPath(t_rep_idx, t_rep.rep_word);
+    queueExactImage(document.getElementById("wtImg"), t_word, generation);
     document.getElementById("wtInfo").innerHTML =
       "<b>Orbit " + t_rep_idx + "</b>" +
       (t_rep.self_stable ? " <span style='color:#e67e22'>[self-stable]</span>" : "") +
       "<br>Word: " + t_word +
       (t_k > 0 ? "<br><small>prom^" + t_k + " of rep " + t_rep.rep_word + "</small>" : "") +
+      "<br><small>Displayed graph: exact transpose word</small>" +
       "<br>" + (t_survives
         ? "<span style='color:#8e44ad;font-weight:bold'>✓ W* survives Lemma 4.6</span>"
         : "<span style='color:#c0392b'>✗ W* eliminated by Lemma 4.6</span>");
   } else {
-    document.getElementById("wtImg").src = "";
+    document.getElementById("wtImg").src = EMPTY_PIXEL;
     document.getElementById("wtInfo").innerHTML = "Transpose not found.";
   }
 
@@ -228,24 +688,22 @@ function showWord(w_word) {
     card.className = cls;
     card.innerHTML =
       (s.is_transpose ? "<div class='transpose-badge'>W*</div>" : "") +
-      "<img src='" + imgPath(s.x_idx, s.x_rep_word) + "' loading='lazy'>" +
       "<div class='card-idx'>Orbit " + s.x_idx + "</div>" +
       "<div class='card-rot'>k=" + s.k + "</div>" +
       "<div class='card-word'>" + s.x_word_k + "</div>";
+    const image = document.createElement("img");
+    image.loading = "lazy";
+    card.insertBefore(image, card.querySelector(".card-idx"));
+    queueExactImage(image, s.x_word_k, generation, true);
     card.onclick = (function(xwk) {
-      return function() {
-        document.getElementById("wordInput").value = xwk;
-        document.getElementById("idxInput").value  = "";
-        document.getElementById("quickSelect").value = "";
-        showWord(xwk);
-        window.scrollTo(0,0);
-      };
+      return function() { openExactWord(xwk); };
     })(s.x_word_k);
     grid.appendChild(card);
   });
 }
 
 function doSearch() {
+  surgeryReturnWord = null;
   const w = document.getElementById("wordInput").value.trim();
   const i = document.getElementById("idxInput").value.trim();
   if (w) { showWord(w); }
@@ -257,6 +715,7 @@ function doSearch() {
 }
 
 function quickGo() {
+  surgeryReturnWord = null;
   const v = document.getElementById("quickSelect").value;
   if (!v) return;
   if (v.length === 16) { document.getElementById("wordInput").value = v; showWord(v); }
