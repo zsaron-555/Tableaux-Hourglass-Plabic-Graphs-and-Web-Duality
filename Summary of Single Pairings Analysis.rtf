@@ -1,0 +1,178 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2867
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fnil\fcharset0 Menlo-Regular;}
+{\colortbl;\red255\green255\blue255;\red0\green0\blue0;}
+{\*\expandedcolortbl;;\csgray\c0;}
+\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\pardirnatural\partightenfactor0
+
+\f0\fs22 \cf2 \CocoaLigature0 ============================================================\
+DATA SUMMARY\
+============================================================\
+Number of examples: 1424\
+Word lengths: \{16: 1424\}\
+Signs: \{-1: 679, 1: 745\}\
+Duplicate W words: 0\
+Words with incorrect multiplicities: 0\
+\
+Checking Yamanouchi property...\
+Non-Yamanouchi words: 1424\
+\
+Example tableau:\
+\
+ 1  2  3 11\
+ 4  5  7 12\
+ 6  9 13 15\
+ 8 10 14 16\
+\
+\
+Number of examples: 1424\
+Number of features: 177\
+\
+Saving features.csv\
+\
+   inv  inv_parity  num_descents  ...  pat3_224  pat3_214  pat3_333\
+0   18           0             8  ...       0.0       0.0       0.0\
+1   16           0             8  ...       0.0       0.0       0.0\
+2   21           1             8  ...       0.0       0.0       0.0\
+3   18           0             9  ...       0.0       0.0       0.0\
+4   15           1             8  ...       0.0       0.0       0.0\
+\
+[5 rows x 179 columns]\
+\
+============================================================\
+MACHINE LEARNING\
+============================================================\
+\
+Decision tree accuracy:\
+0.6390091425747467 +/- 0.04792103324454384\
+\
+Random forest accuracy:\
+0.6846503582900916 +/- 0.050433745704517294\
+\
+Logistic regression accuracy:\
+0.6411242895972326 +/- 0.036176817495636546\
+\
+============================================================\
+Top 20 Random Forest Features\
+============================================================\
+\
+inv                 0.046812\
+major_index         0.036644\
+row4_min            0.018989\
+first_4             0.018769\
+row2_max            0.018269\
+last_2              0.018172\
+last_1              0.017000\
+pat3_424            0.016040\
+pat3_234            0.015614\
+prefix4_11          0.015566\
+row1_max            0.015064\
+prefix3_11          0.014779\
+inv_parity          0.014618\
+prefix4_9           0.012273\
+transition_plus2    0.012156\
+transition_plus1    0.011670\
+pat3_343            0.011642\
+prefix3_12          0.011550\
+pat2_24             0.011480\
+pair_24             0.011434\
+dtype: float64\
+\
+============================================================\
+Largest Logistic Coefficients\
+============================================================\
+\
+pat3_314    -1.235059\
+pat3_241     1.196228\
+pat3_414     0.937093\
+pat3_331     0.900027\
+pat3_131    -0.859246\
+pat3_244    -0.840561\
+pat3_313     0.822373\
+prefix2_4    0.821793\
+prefix3_4   -0.784071\
+prefix4_7   -0.779797\
+prefix4_9   -0.772475\
+pat3_333    -0.740958\
+pat3_441    -0.693760\
+pat3_413    -0.668714\
+prefix2_8    0.631054\
+prefix3_7    0.604032\
+pat3_242    -0.585712\
+pat3_133     0.573484\
+prefix1_8   -0.556936\
+pat3_344     0.543253\
+dtype: float64\
+\
+============================================================\
+Best Individual Features\
+============================================================\
+\
+prefix2_5                 0.591\
+prefix1_5                 0.585\
+prefix1_6                 0.573\
+row1_max                  0.562\
+last_1                    0.562\
+prefix1_7                 0.560\
+prefix1_9                 0.559\
+pat3_341                  0.555\
+prefix1_8                 0.551\
+pat2_41                   0.550\
+pair_41                   0.550\
+prefix2_6                 0.549\
+prefix4_11                0.546\
+prefix3_12                0.546\
+pat3_412                  0.546\
+pat3_122                  0.546\
+pat3_221                  0.545\
+pat3_344                  0.543\
+pat2_12                   0.542\
+pair_12                   0.542\
+\
+============================================================\
+SINGLE FEATURE PARITY SEARCH\
+============================================================\
+prefix2_5                0.591\
+prefix1_5                0.586\
+prefix1_6                0.574\
+prefix1_7                0.560\
+prefix1_9                0.559\
+pat3_341                 0.555\
+transition_plus2         0.553\
+prefix1_8                0.551\
+pat2_41                  0.550\
+pair_41                  0.550\
+prefix3_12               0.546\
+pat3_412                 0.546\
+pat3_221                 0.545\
+prefix4_11               0.544\
+pat3_122                 0.544\
+prefix1_10               0.542\
+prefix2_3                0.541\
+prefix1_3                0.541\
+pat2_24                  0.541\
+pair_24                  0.541\
+\
+============================================================\
+PAIRWISE PARITY SEARCH\
+============================================================\
+prefix1_5           pat3_424            0.618\
+prefix1_5           pat3_224            0.603\
+prefix1_5           pat3_414            0.598\
+prefix1_5           pat3_244            0.598\
+prefix1_6           pat3_424            0.597\
+prefix1_6           pat3_221            0.596\
+prefix1_5           pat3_241            0.596\
+prefix1_5           pat3_312            0.596\
+prefix1_5           pat3_333            0.594\
+prefix1_5           prefix3_5           0.591\
+row1_min            prefix2_5           0.591\
+prefix2_5           prefix4_15          0.591\
+prefix1_5           pat3_331            0.591\
+prefix1_5           pat3_142            0.591\
+prefix1_1           prefix2_5           0.591\
+pat3_112            prefix2_5           0.591\
+last_4              prefix2_5           0.591\
+prefix1_5           pat3_242            0.590\
+prefix1_5           pat3_214            0.589\
+prefix1_6           pat3_244            0.588}
