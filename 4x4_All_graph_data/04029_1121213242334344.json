@@ -1,0 +1,1956 @@
+{
+  "boundary": [
+    {
+      "label": 1,
+      "node": 0,
+      "x": 0.38268343236508984,
+      "y": 0.9238795325112867
+    },
+    {
+      "label": 2,
+      "node": 1,
+      "x": 0.7071067811865476,
+      "y": 0.7071067811865475
+    },
+    {
+      "label": 3,
+      "node": 2,
+      "x": 0.9238795325112867,
+      "y": 0.3826834323650898
+    },
+    {
+      "label": 4,
+      "node": 3,
+      "x": 1.0,
+      "y": 0.0
+    },
+    {
+      "label": 5,
+      "node": 4,
+      "x": 0.9238795325112867,
+      "y": -0.3826834323650898
+    },
+    {
+      "label": 6,
+      "node": 5,
+      "x": 0.7071067811865476,
+      "y": -0.7071067811865475
+    },
+    {
+      "label": 7,
+      "node": 6,
+      "x": 0.38268343236508984,
+      "y": -0.9238795325112867
+    },
+    {
+      "label": 8,
+      "node": 7,
+      "x": 6.123233995736766e-17,
+      "y": -1.0
+    },
+    {
+      "label": 9,
+      "node": 8,
+      "x": -0.3826834323650897,
+      "y": -0.9238795325112867
+    },
+    {
+      "label": 10,
+      "node": 9,
+      "x": -0.7071067811865475,
+      "y": -0.7071067811865476
+    },
+    {
+      "label": 11,
+      "node": 10,
+      "x": -0.9238795325112865,
+      "y": -0.3826834323650903
+    },
+    {
+      "label": 12,
+      "node": 11,
+      "x": -1.0,
+      "y": -1.2246467991473532e-16
+    },
+    {
+      "label": 13,
+      "node": 12,
+      "x": -0.9238795325112866,
+      "y": 0.38268343236509006
+    },
+    {
+      "label": 14,
+      "node": 13,
+      "x": -0.7071067811865477,
+      "y": 0.7071067811865475
+    },
+    {
+      "label": 15,
+      "node": 14,
+      "x": -0.38268343236509034,
+      "y": 0.9238795325112865
+    },
+    {
+      "label": 16,
+      "node": 15,
+      "x": -1.8369701987210297e-16,
+      "y": 1.0
+    }
+  ],
+  "boundary_labels": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16
+  ],
+  "edges": [
+    {
+      "double": true,
+      "dst": 17,
+      "id": 0,
+      "kind": "hourglass",
+      "label": 0,
+      "route": [
+        [
+          0.46698211987975274,
+          -0.7279691852236517
+        ],
+        [
+          0.3515545824144266,
+          -0.5982944184692421
+        ]
+      ],
+      "src": 16
+    },
+    {
+      "double": true,
+      "dst": 22,
+      "id": 1,
+      "kind": "hourglass",
+      "label": 0,
+      "route": [
+        [
+          0.5277185114333371,
+          0.5198272051958757
+        ],
+        [
+          0.2936015053756597,
+          0.4994746261310641
+        ]
+      ],
+      "src": 21
+    },
+    {
+      "double": true,
+      "dst": 25,
+      "id": 2,
+      "kind": "hourglass",
+      "label": 0,
+      "route": [
+        [
+          -0.7538835216858524,
+          0.10478566197708417
+        ],
+        [
+          -0.5368939967116426,
+          0.014560687322242853
+        ]
+      ],
+      "src": 24
+    },
+    {
+      "double": true,
+      "dst": 28,
+      "id": 3,
+      "kind": "hourglass",
+      "label": 0,
+      "route": [
+        [
+          -0.36944009281359147,
+          0.7067969072958267
+        ],
+        [
+          -0.16962815400214737,
+          0.5831029741042117
+        ]
+      ],
+      "src": 27
+    },
+    {
+      "double": false,
+      "dst": 29,
+      "id": 4,
+      "kind": "ordinary",
+      "label": 1,
+      "route": [
+        [
+          0.38268343236508984,
+          0.9238795325112867
+        ],
+        [
+          0.12319761333531169,
+          0.750173730854225
+        ]
+      ],
+      "src": 0
+    },
+    {
+      "double": false,
+      "dst": 21,
+      "id": 5,
+      "kind": "ordinary",
+      "label": 1,
+      "route": [
+        [
+          0.7071067811865476,
+          0.7071067811865475
+        ],
+        [
+          0.5277185114333371,
+          0.5198272051958757
+        ]
+      ],
+      "src": 1
+    },
+    {
+      "double": false,
+      "dst": 21,
+      "id": 6,
+      "kind": "ordinary",
+      "label": 2,
+      "route": [
+        [
+          0.9238795325112867,
+          0.3826834323650898
+        ],
+        [
+          0.5277185114333371,
+          0.5198272051958757
+        ]
+      ],
+      "src": 2
+    },
+    {
+      "double": false,
+      "dst": 18,
+      "id": 7,
+      "kind": "ordinary",
+      "label": 1,
+      "route": [
+        [
+          1.0,
+          0.0
+        ],
+        [
+          0.5619597255980232,
+          -0.3180972879805083
+        ]
+      ],
+      "src": 3
+    },
+    {
+      "double": false,
+      "dst": 18,
+      "id": 8,
+      "kind": "ordinary",
+      "label": 2,
+      "route": [
+        [
+          0.9238795325112867,
+          -0.3826834323650898
+        ],
+        [
+          0.5619597255980232,
+          -0.3180972879805083
+        ]
+      ],
+      "src": 4
+    },
+    {
+      "double": false,
+      "dst": 16,
+      "id": 9,
+      "kind": "ordinary",
+      "label": 1,
+      "route": [
+        [
+          0.7071067811865476,
+          -0.7071067811865475
+        ],
+        [
+          0.46698211987975274,
+          -0.7279691852236517
+        ]
+      ],
+      "src": 5
+    },
+    {
+      "double": false,
+      "dst": 16,
+      "id": 10,
+      "kind": "ordinary",
+      "label": 3,
+      "route": [
+        [
+          0.38268343236508984,
+          -0.9238795325112867
+        ],
+        [
+          0.46698211987975274,
+          -0.7279691852236517
+        ]
+      ],
+      "src": 6
+    },
+    {
+      "double": false,
+      "dst": 19,
+      "id": 11,
+      "kind": "ordinary",
+      "label": 2,
+      "route": [
+        [
+          6.123233995736766e-17,
+          -1.0
+        ],
+        [
+          -0.014681015621070577,
+          -0.7033963130170576
+        ]
+      ],
+      "src": 7
+    },
+    {
+      "double": false,
+      "dst": 19,
+      "id": 12,
+      "kind": "ordinary",
+      "label": 4,
+      "route": [
+        [
+          -0.3826834323650897,
+          -0.9238795325112867
+        ],
+        [
+          -0.014681015621070577,
+          -0.7033963130170576
+        ]
+      ],
+      "src": 8
+    },
+    {
+      "double": false,
+      "dst": 23,
+      "id": 13,
+      "kind": "ordinary",
+      "label": 2,
+      "route": [
+        [
+          -0.7071067811865475,
+          -0.7071067811865476
+        ],
+        [
+          -0.5464910807054203,
+          -0.34266146308085504
+        ]
+      ],
+      "src": 9
+    },
+    {
+      "double": false,
+      "dst": 23,
+      "id": 14,
+      "kind": "ordinary",
+      "label": 3,
+      "route": [
+        [
+          -0.9238795325112865,
+          -0.3826834323650903
+        ],
+        [
+          -0.5464910807054203,
+          -0.34266146308085504
+        ]
+      ],
+      "src": 10
+    },
+    {
+      "double": false,
+      "dst": 24,
+      "id": 15,
+      "kind": "ordinary",
+      "label": 3,
+      "route": [
+        [
+          -1.0,
+          -1.2246467991473532e-16
+        ],
+        [
+          -0.7538835216858524,
+          0.10478566197708417
+        ]
+      ],
+      "src": 11
+    },
+    {
+      "double": false,
+      "dst": 24,
+      "id": 16,
+      "kind": "ordinary",
+      "label": 4,
+      "route": [
+        [
+          -0.9238795325112866,
+          0.38268343236509006
+        ],
+        [
+          -0.7538835216858524,
+          0.10478566197708417
+        ]
+      ],
+      "src": 12
+    },
+    {
+      "double": false,
+      "dst": 27,
+      "id": 17,
+      "kind": "ordinary",
+      "label": 3,
+      "route": [
+        [
+          -0.7071067811865477,
+          0.7071067811865475
+        ],
+        [
+          -0.36944009281359147,
+          0.7067969072958267
+        ]
+      ],
+      "src": 13
+    },
+    {
+      "double": false,
+      "dst": 27,
+      "id": 18,
+      "kind": "ordinary",
+      "label": 4,
+      "route": [
+        [
+          -0.38268343236509034,
+          0.9238795325112865
+        ],
+        [
+          -0.36944009281359147,
+          0.7067969072958267
+        ]
+      ],
+      "src": 14
+    },
+    {
+      "double": false,
+      "dst": 29,
+      "id": 19,
+      "kind": "ordinary",
+      "label": 4,
+      "route": [
+        [
+          -1.8369701987210297e-16,
+          1.0
+        ],
+        [
+          0.12319761333531169,
+          0.750173730854225
+        ]
+      ],
+      "src": 15
+    },
+    {
+      "double": false,
+      "dst": 18,
+      "id": 20,
+      "kind": "ordinary",
+      "label": 3,
+      "route": [
+        [
+          0.3515545824144266,
+          -0.5982944184692421
+        ],
+        [
+          0.5619597255980232,
+          -0.3180972879805083
+        ]
+      ],
+      "src": 17
+    },
+    {
+      "double": false,
+      "dst": 19,
+      "id": 21,
+      "kind": "ordinary",
+      "label": 1,
+      "route": [
+        [
+          0.3515545824144266,
+          -0.5982944184692421
+        ],
+        [
+          -0.014681015621070577,
+          -0.7033963130170576
+        ]
+      ],
+      "src": 17
+    },
+    {
+      "double": false,
+      "dst": 20,
+      "id": 22,
+      "kind": "ordinary",
+      "label": 4,
+      "route": [
+        [
+          0.5619597255980232,
+          -0.3180972879805083
+        ],
+        [
+          -0.02760149776344135,
+          -0.291348501785986
+        ]
+      ],
+      "src": 18
+    },
+    {
+      "double": false,
+      "dst": 20,
+      "id": 23,
+      "kind": "ordinary",
+      "label": 3,
+      "route": [
+        [
+          -0.014681015621070577,
+          -0.7033963130170576
+        ],
+        [
+          -0.02760149776344135,
+          -0.291348501785986
+        ]
+      ],
+      "src": 19
+    },
+    {
+      "double": false,
+      "dst": 26,
+      "id": 24,
+      "kind": "ordinary",
+      "label": 2,
+      "route": [
+        [
+          -0.02760149776344135,
+          -0.291348501785986
+        ],
+        [
+          -0.11121774703692285,
+          0.19898993803345744
+        ]
+      ],
+      "src": 20
+    },
+    {
+      "double": false,
+      "dst": 23,
+      "id": 25,
+      "kind": "ordinary",
+      "label": 1,
+      "route": [
+        [
+          -0.02760149776344135,
+          -0.291348501785986
+        ],
+        [
+          -0.5464910807054203,
+          -0.34266146308085504
+        ]
+      ],
+      "src": 20
+    },
+    {
+      "double": false,
+      "dst": 29,
+      "id": 26,
+      "kind": "ordinary",
+      "label": 2,
+      "route": [
+        [
+          0.2936015053756597,
+          0.4994746261310641
+        ],
+        [
+          0.12319761333531169,
+          0.750173730854225
+        ]
+      ],
+      "src": 22
+    },
+    {
+      "double": false,
+      "dst": 26,
+      "id": 27,
+      "kind": "ordinary",
+      "label": 1,
+      "route": [
+        [
+          0.2936015053756597,
+          0.4994746261310641
+        ],
+        [
+          -0.11121774703692285,
+          0.19898993803345744
+        ]
+      ],
+      "src": 22
+    },
+    {
+      "double": false,
+      "dst": 25,
+      "id": 28,
+      "kind": "ordinary",
+      "label": 4,
+      "route": [
+        [
+          -0.5464910807054203,
+          -0.34266146308085504
+        ],
+        [
+          -0.5368939967116426,
+          0.014560687322242853
+        ]
+      ],
+      "src": 23
+    },
+    {
+      "double": false,
+      "dst": 26,
+      "id": 29,
+      "kind": "ordinary",
+      "label": 3,
+      "route": [
+        [
+          -0.5368939967116426,
+          0.014560687322242853
+        ],
+        [
+          -0.11121774703692285,
+          0.19898993803345744
+        ]
+      ],
+      "src": 25
+    },
+    {
+      "double": false,
+      "dst": 28,
+      "id": 30,
+      "kind": "ordinary",
+      "label": 4,
+      "route": [
+        [
+          -0.11121774703692285,
+          0.19898993803345744
+        ],
+        [
+          -0.16962815400214737,
+          0.5831029741042117
+        ]
+      ],
+      "src": 26
+    },
+    {
+      "double": false,
+      "dst": 29,
+      "id": 31,
+      "kind": "ordinary",
+      "label": 3,
+      "route": [
+        [
+          -0.16962815400214737,
+          0.5831029741042117
+        ],
+        [
+          0.12319761333531169,
+          0.750173730854225
+        ]
+      ],
+      "src": 28
+    }
+  ],
+  "effective_rotation_system": {
+    "0": [
+      {
+        "angle": -2.55168417626966,
+        "ccw_slot": 0,
+        "edge": 4,
+        "kind": "ordinary",
+        "neighbor": 29,
+        "strand": null
+      }
+    ],
+    "1": [
+      {
+        "angle": -2.334676137012797,
+        "ccw_slot": 0,
+        "edge": 5,
+        "kind": "ordinary",
+        "neighbor": 21,
+        "strand": null
+      }
+    ],
+    "10": [
+      {
+        "angle": 0.10565489478412131,
+        "ccw_slot": 0,
+        "edge": 14,
+        "kind": "ordinary",
+        "neighbor": 23,
+        "strand": null
+      }
+    ],
+    "11": [
+      {
+        "angle": 0.40251113745163297,
+        "ccw_slot": 0,
+        "edge": 15,
+        "kind": "ordinary",
+        "neighbor": 24,
+        "strand": null
+      }
+    ],
+    "12": [
+      {
+        "angle": -1.0218027059413113,
+        "ccw_slot": 0,
+        "edge": 16,
+        "kind": "ordinary",
+        "neighbor": 24,
+        "strand": null
+      }
+    ],
+    "13": [
+      {
+        "angle": -0.0009176913637124705,
+        "ccw_slot": 0,
+        "edge": 17,
+        "kind": "ordinary",
+        "neighbor": 27,
+        "strand": null
+      }
+    ],
+    "14": [
+      {
+        "angle": -1.5098658550485817,
+        "ccw_slot": 0,
+        "edge": 18,
+        "kind": "ordinary",
+        "neighbor": 27,
+        "strand": null
+      }
+    ],
+    "15": [
+      {
+        "angle": -1.112657278339504,
+        "ccw_slot": 0,
+        "edge": 19,
+        "kind": "ordinary",
+        "neighbor": 29,
+        "strand": null
+      }
+    ],
+    "16": [
+      {
+        "angle": -1.9771409326654432,
+        "ccw_slot": 0,
+        "edge": 10,
+        "kind": "ordinary",
+        "neighbor": 6,
+        "strand": null
+      },
+      {
+        "angle": 0.08666393434264341,
+        "ccw_slot": 1,
+        "edge": 9,
+        "kind": "ordinary",
+        "neighbor": 5,
+        "strand": null
+      },
+      {
+        "angle": 2.2801321415907276,
+        "ccw_slot": 2,
+        "edge": 0,
+        "kind": "hourglass_strand",
+        "neighbor": 17,
+        "strand": 0
+      },
+      {
+        "angle": 2.3161321415907272,
+        "ccw_slot": 3,
+        "edge": 0,
+        "kind": "hourglass_strand",
+        "neighbor": 17,
+        "strand": 1
+      }
+    ],
+    "17": [
+      {
+        "angle": -2.8621242000176217,
+        "ccw_slot": 0,
+        "edge": 21,
+        "kind": "ordinary",
+        "neighbor": 19,
+        "strand": null
+      },
+      {
+        "angle": -0.8614605119990659,
+        "ccw_slot": 1,
+        "edge": 0,
+        "kind": "hourglass_strand",
+        "neighbor": 16,
+        "strand": 1
+      },
+      {
+        "angle": -0.8254605119990659,
+        "ccw_slot": 2,
+        "edge": 0,
+        "kind": "hourglass_strand",
+        "neighbor": 16,
+        "strand": 0
+      },
+      {
+        "angle": 0.9267077871633891,
+        "ccw_slot": 3,
+        "edge": 20,
+        "kind": "ordinary",
+        "neighbor": 18,
+        "strand": null
+      }
+    ],
+    "18": [
+      {
+        "angle": -2.214884866426404,
+        "ccw_slot": 0,
+        "edge": 20,
+        "kind": "ordinary",
+        "neighbor": 17,
+        "strand": null
+      },
+      {
+        "angle": -0.17659534095916504,
+        "ccw_slot": 1,
+        "edge": 8,
+        "kind": "ordinary",
+        "neighbor": 4,
+        "strand": null
+      },
+      {
+        "angle": 0.6280830080404292,
+        "ccw_slot": 2,
+        "edge": 7,
+        "kind": "ordinary",
+        "neighbor": 3,
+        "strand": null
+      },
+      {
+        "angle": 3.096253079567063,
+        "ccw_slot": 3,
+        "edge": 22,
+        "kind": "ordinary",
+        "neighbor": 20,
+        "strand": null
+      }
+    ],
+    "19": [
+      {
+        "angle": -2.601809242418422,
+        "ccw_slot": 0,
+        "edge": 12,
+        "kind": "ordinary",
+        "neighbor": 8,
+        "strand": null
+      },
+      {
+        "angle": -1.5213396121467515,
+        "ccw_slot": 1,
+        "edge": 11,
+        "kind": "ordinary",
+        "neighbor": 7,
+        "strand": null
+      },
+      {
+        "angle": 0.27946845357217154,
+        "ccw_slot": 2,
+        "edge": 21,
+        "kind": "ordinary",
+        "neighbor": 17,
+        "strand": null
+      },
+      {
+        "angle": 1.6021428104206323,
+        "ccw_slot": 3,
+        "edge": 23,
+        "kind": "ordinary",
+        "neighbor": 20,
+        "strand": null
+      }
+    ],
+    "2": [
+      {
+        "angle": 2.8083233054984373,
+        "ccw_slot": 0,
+        "edge": 6,
+        "kind": "ordinary",
+        "neighbor": 21,
+        "strand": null
+      }
+    ],
+    "20": [
+      {
+        "angle": -3.043023187772975,
+        "ccw_slot": 0,
+        "edge": 25,
+        "kind": "ordinary",
+        "neighbor": 23,
+        "strand": null
+      },
+      {
+        "angle": -1.539449843169161,
+        "ccw_slot": 1,
+        "edge": 23,
+        "kind": "ordinary",
+        "neighbor": 19,
+        "strand": null
+      },
+      {
+        "angle": -0.04533957402273006,
+        "ccw_slot": 2,
+        "edge": 22,
+        "kind": "ordinary",
+        "neighbor": 18,
+        "strand": null
+      },
+      {
+        "angle": 1.7396992435094576,
+        "ccw_slot": 3,
+        "edge": 24,
+        "kind": "ordinary",
+        "neighbor": 26,
+        "strand": null
+      }
+    ],
+    "21": [
+      {
+        "angle": -3.07287729823481,
+        "ccw_slot": 0,
+        "edge": 1,
+        "kind": "hourglass_strand",
+        "neighbor": 22,
+        "strand": 0
+      },
+      {
+        "angle": -3.0368772982348102,
+        "ccw_slot": 1,
+        "edge": 1,
+        "kind": "hourglass_strand",
+        "neighbor": 22,
+        "strand": 1
+      },
+      {
+        "angle": -0.3332693480913558,
+        "ccw_slot": 2,
+        "edge": 6,
+        "kind": "ordinary",
+        "neighbor": 2,
+        "strand": null
+      },
+      {
+        "angle": 0.8069165165769964,
+        "ccw_slot": 3,
+        "edge": 5,
+        "kind": "ordinary",
+        "neighbor": 1,
+        "strand": null
+      }
+    ],
+    "22": [
+      {
+        "angle": -2.503057922229577,
+        "ccw_slot": 0,
+        "edge": 27,
+        "kind": "ordinary",
+        "neighbor": 26,
+        "strand": null
+      },
+      {
+        "angle": 0.06871535535498328,
+        "ccw_slot": 1,
+        "edge": 1,
+        "kind": "hourglass_strand",
+        "neighbor": 21,
+        "strand": 1
+      },
+      {
+        "angle": 0.10471535535498329,
+        "ccw_slot": 2,
+        "edge": 1,
+        "kind": "hourglass_strand",
+        "neighbor": 21,
+        "strand": 0
+      },
+      {
+        "angle": 2.1677779377238338,
+        "ccw_slot": 3,
+        "edge": 26,
+        "kind": "ordinary",
+        "neighbor": 29,
+        "strand": null
+      }
+    ],
+    "23": [
+      {
+        "angle": -3.0359377588056717,
+        "ccw_slot": 0,
+        "edge": 14,
+        "kind": "ordinary",
+        "neighbor": 10,
+        "strand": null
+      },
+      {
+        "angle": -1.9859001924088646,
+        "ccw_slot": 1,
+        "edge": 13,
+        "kind": "ordinary",
+        "neighbor": 9,
+        "strand": null
+      },
+      {
+        "angle": 0.09856946581681791,
+        "ccw_slot": 2,
+        "edge": 25,
+        "kind": "ordinary",
+        "neighbor": 20,
+        "strand": null
+      },
+      {
+        "angle": 1.543936917309886,
+        "ccw_slot": 3,
+        "edge": 28,
+        "kind": "ordinary",
+        "neighbor": 25,
+        "strand": null
+      }
+    ],
+    "24": [
+      {
+        "angle": -2.7390815161381603,
+        "ccw_slot": 0,
+        "edge": 15,
+        "kind": "ordinary",
+        "neighbor": 11,
+        "strand": null
+      },
+      {
+        "angle": -0.4120552999891878,
+        "ccw_slot": 1,
+        "edge": 2,
+        "kind": "hourglass_strand",
+        "neighbor": 25,
+        "strand": 0
+      },
+      {
+        "angle": -0.37605529998918774,
+        "ccw_slot": 2,
+        "edge": 2,
+        "kind": "hourglass_strand",
+        "neighbor": 25,
+        "strand": 1
+      },
+      {
+        "angle": 2.119789947648482,
+        "ccw_slot": 3,
+        "edge": 16,
+        "kind": "ordinary",
+        "neighbor": 12,
+        "strand": null
+      }
+    ],
+    "25": [
+      {
+        "angle": -1.5976557362799073,
+        "ccw_slot": 0,
+        "edge": 28,
+        "kind": "ordinary",
+        "neighbor": 23,
+        "strand": null
+      },
+      {
+        "angle": 0.40884758815446637,
+        "ccw_slot": 1,
+        "edge": 29,
+        "kind": "ordinary",
+        "neighbor": 26,
+        "strand": null
+      },
+      {
+        "angle": 2.729537353600606,
+        "ccw_slot": 2,
+        "edge": 2,
+        "kind": "hourglass_strand",
+        "neighbor": 24,
+        "strand": 1
+      },
+      {
+        "angle": 2.7655373536006054,
+        "ccw_slot": 3,
+        "edge": 2,
+        "kind": "hourglass_strand",
+        "neighbor": 24,
+        "strand": 0
+      }
+    ],
+    "26": [
+      {
+        "angle": -2.732745065435327,
+        "ccw_slot": 0,
+        "edge": 29,
+        "kind": "ordinary",
+        "neighbor": 25,
+        "strand": null
+      },
+      {
+        "angle": -1.4018934100803355,
+        "ccw_slot": 1,
+        "edge": 24,
+        "kind": "ordinary",
+        "neighbor": 20,
+        "strand": null
+      },
+      {
+        "angle": 0.6385347313602165,
+        "ccw_slot": 2,
+        "edge": 27,
+        "kind": "ordinary",
+        "neighbor": 22,
+        "strand": null
+      },
+      {
+        "angle": 1.7217058767957458,
+        "ccw_slot": 3,
+        "edge": 30,
+        "kind": "ordinary",
+        "neighbor": 28,
+        "strand": null
+      }
+    ],
+    "27": [
+      {
+        "angle": -0.5723104928004218,
+        "ccw_slot": 0,
+        "edge": 3,
+        "kind": "hourglass_strand",
+        "neighbor": 28,
+        "strand": 0
+      },
+      {
+        "angle": -0.5363104928004218,
+        "ccw_slot": 1,
+        "edge": 3,
+        "kind": "hourglass_strand",
+        "neighbor": 28,
+        "strand": 1
+      },
+      {
+        "angle": 1.6317267985412116,
+        "ccw_slot": 2,
+        "edge": 18,
+        "kind": "ordinary",
+        "neighbor": 14,
+        "strand": null
+      },
+      {
+        "angle": 3.140674962226081,
+        "ccw_slot": 3,
+        "edge": 17,
+        "kind": "ordinary",
+        "neighbor": 13,
+        "strand": null
+      }
+    ],
+    "28": [
+      {
+        "angle": -1.4198867767940473,
+        "ccw_slot": 0,
+        "edge": 30,
+        "kind": "ordinary",
+        "neighbor": 26,
+        "strand": null
+      },
+      {
+        "angle": 0.5184810187103867,
+        "ccw_slot": 1,
+        "edge": 31,
+        "kind": "ordinary",
+        "neighbor": 29,
+        "strand": null
+      },
+      {
+        "angle": 2.5692821607893714,
+        "ccw_slot": 2,
+        "edge": 3,
+        "kind": "hourglass_strand",
+        "neighbor": 27,
+        "strand": 1
+      },
+      {
+        "angle": 2.605282160789371,
+        "ccw_slot": 3,
+        "edge": 3,
+        "kind": "hourglass_strand",
+        "neighbor": 27,
+        "strand": 0
+      }
+    ],
+    "29": [
+      {
+        "angle": -2.6231116348794066,
+        "ccw_slot": 0,
+        "edge": 31,
+        "kind": "ordinary",
+        "neighbor": 28,
+        "strand": null
+      },
+      {
+        "angle": -0.9738147158659592,
+        "ccw_slot": 1,
+        "edge": 26,
+        "kind": "ordinary",
+        "neighbor": 22,
+        "strand": null
+      },
+      {
+        "angle": 0.5899084773201332,
+        "ccw_slot": 2,
+        "edge": 4,
+        "kind": "ordinary",
+        "neighbor": 0,
+        "strand": null
+      },
+      {
+        "angle": 2.028935375250289,
+        "ccw_slot": 3,
+        "edge": 19,
+        "kind": "ordinary",
+        "neighbor": 15,
+        "strand": null
+      }
+    ],
+    "3": [
+      {
+        "angle": -2.513509645549364,
+        "ccw_slot": 0,
+        "edge": 7,
+        "kind": "ordinary",
+        "neighbor": 18,
+        "strand": null
+      }
+    ],
+    "4": [
+      {
+        "angle": 2.9649973126306284,
+        "ccw_slot": 0,
+        "edge": 8,
+        "kind": "ordinary",
+        "neighbor": 18,
+        "strand": null
+      }
+    ],
+    "5": [
+      {
+        "angle": -3.0549287192471497,
+        "ccw_slot": 0,
+        "edge": 9,
+        "kind": "ordinary",
+        "neighbor": 16,
+        "strand": null
+      }
+    ],
+    "6": [
+      {
+        "angle": 1.16445172092435,
+        "ccw_slot": 0,
+        "edge": 10,
+        "kind": "ordinary",
+        "neighbor": 16,
+        "strand": null
+      }
+    ],
+    "7": [
+      {
+        "angle": 1.6202530414430416,
+        "ccw_slot": 0,
+        "edge": 11,
+        "kind": "ordinary",
+        "neighbor": 19,
+        "strand": null
+      }
+    ],
+    "8": [
+      {
+        "angle": 0.5397834111713712,
+        "ccw_slot": 0,
+        "edge": 12,
+        "kind": "ordinary",
+        "neighbor": 19,
+        "strand": null
+      }
+    ],
+    "9": [
+      {
+        "angle": 1.1556924611809285,
+        "ccw_slot": 0,
+        "edge": 13,
+        "kind": "ordinary",
+        "neighbor": 23,
+        "strand": null
+      }
+    ]
+  },
+  "hourglasses": [
+    {
+      "black": 17,
+      "edge": 0,
+      "white": 16
+    },
+    {
+      "black": 22,
+      "edge": 1,
+      "white": 21
+    },
+    {
+      "black": 25,
+      "edge": 2,
+      "white": 24
+    },
+    {
+      "black": 28,
+      "edge": 3,
+      "white": 27
+    }
+  ],
+  "metadata": {
+    "bad_hourglass_colors": [],
+    "bad_valences": [],
+    "conversion_mode": "paper_strict",
+    "crossings_after": 0,
+    "crossings_before": 5,
+    "edges": 32,
+    "forbidden_pattern": false,
+    "hanging_hourglasses": [],
+    "hourglass_count": 4,
+    "hourglass_edge_overlaps": [],
+    "hourglass_endpoint_collinearities": [],
+    "hourglass_length_target": 0.205,
+    "internal_nodes_outside_disk": [],
+    "layout_score_after": 0.0,
+    "layout_score_before": 0.0,
+    "node_node_overlaps": [],
+    "ordinary_edge_crossings": [],
+    "outside_disk": [],
+    "reference_layout": "reference_style_generic",
+    "same_color_ordinary_edges": [],
+    "source_index": 4029,
+    "source_row": {
+      "index": "4029",
+      "word": "1121213242334344"
+    },
+    "symmetry_applied": false,
+    "vertex_edge_overlaps": [],
+    "vertices": 30,
+    "word": "1121213242334344"
+  },
+  "nodes": [
+    {
+      "boundary_label": 1,
+      "color": "black",
+      "growth_terminal": 1,
+      "id": 0,
+      "local_case": null,
+      "x": 0.38268343236508984,
+      "y": 0.9238795325112867
+    },
+    {
+      "boundary_label": 2,
+      "color": "black",
+      "growth_terminal": 2,
+      "id": 1,
+      "local_case": null,
+      "x": 0.7071067811865476,
+      "y": 0.7071067811865475
+    },
+    {
+      "boundary_label": 3,
+      "color": "black",
+      "growth_terminal": 3,
+      "id": 2,
+      "local_case": null,
+      "x": 0.9238795325112867,
+      "y": 0.3826834323650898
+    },
+    {
+      "boundary_label": 4,
+      "color": "black",
+      "growth_terminal": 4,
+      "id": 3,
+      "local_case": null,
+      "x": 1.0,
+      "y": 0.0
+    },
+    {
+      "boundary_label": 5,
+      "color": "black",
+      "growth_terminal": 5,
+      "id": 4,
+      "local_case": null,
+      "x": 0.9238795325112867,
+      "y": -0.3826834323650898
+    },
+    {
+      "boundary_label": 6,
+      "color": "black",
+      "growth_terminal": 6,
+      "id": 5,
+      "local_case": null,
+      "x": 0.7071067811865476,
+      "y": -0.7071067811865475
+    },
+    {
+      "boundary_label": 7,
+      "color": "black",
+      "growth_terminal": 7,
+      "id": 6,
+      "local_case": null,
+      "x": 0.38268343236508984,
+      "y": -0.9238795325112867
+    },
+    {
+      "boundary_label": 8,
+      "color": "black",
+      "growth_terminal": 8,
+      "id": 7,
+      "local_case": null,
+      "x": 6.123233995736766e-17,
+      "y": -1.0
+    },
+    {
+      "boundary_label": 9,
+      "color": "black",
+      "growth_terminal": 9,
+      "id": 8,
+      "local_case": null,
+      "x": -0.3826834323650897,
+      "y": -0.9238795325112867
+    },
+    {
+      "boundary_label": 10,
+      "color": "black",
+      "growth_terminal": 10,
+      "id": 9,
+      "local_case": null,
+      "x": -0.7071067811865475,
+      "y": -0.7071067811865476
+    },
+    {
+      "boundary_label": 11,
+      "color": "black",
+      "growth_terminal": 11,
+      "id": 10,
+      "local_case": null,
+      "x": -0.9238795325112865,
+      "y": -0.3826834323650903
+    },
+    {
+      "boundary_label": 12,
+      "color": "black",
+      "growth_terminal": 12,
+      "id": 11,
+      "local_case": null,
+      "x": -1.0,
+      "y": -1.2246467991473532e-16
+    },
+    {
+      "boundary_label": 13,
+      "color": "black",
+      "growth_terminal": 13,
+      "id": 12,
+      "local_case": null,
+      "x": -0.9238795325112866,
+      "y": 0.38268343236509006
+    },
+    {
+      "boundary_label": 14,
+      "color": "black",
+      "growth_terminal": 14,
+      "id": 13,
+      "local_case": null,
+      "x": -0.7071067811865477,
+      "y": 0.7071067811865475
+    },
+    {
+      "boundary_label": 15,
+      "color": "black",
+      "growth_terminal": 15,
+      "id": 14,
+      "local_case": null,
+      "x": -0.38268343236509034,
+      "y": 0.9238795325112865
+    },
+    {
+      "boundary_label": 16,
+      "color": "black",
+      "growth_terminal": 16,
+      "id": 15,
+      "local_case": null,
+      "x": -1.8369701987210297e-16,
+      "y": 1.0
+    },
+    {
+      "boundary_label": null,
+      "color": "white",
+      "growth_terminal": 33,
+      "id": 16,
+      "local_case": "transmit_hourglass_adjacent_03",
+      "x": 0.46698211987975274,
+      "y": -0.7279691852236517
+    },
+    {
+      "boundary_label": null,
+      "color": "black",
+      "growth_terminal": 33,
+      "id": 17,
+      "local_case": "transmit_hourglass_adjacent_03",
+      "x": 0.3515545824144266,
+      "y": -0.5982944184692421
+    },
+    {
+      "boundary_label": null,
+      "color": "white",
+      "growth_terminal": 52,
+      "id": 18,
+      "local_case": "all_in_white_vertex",
+      "x": 0.5619597255980232,
+      "y": -0.3180972879805083
+    },
+    {
+      "boundary_label": null,
+      "color": "white",
+      "growth_terminal": 86,
+      "id": 19,
+      "local_case": "all_in_white_vertex",
+      "x": -0.014681015621070577,
+      "y": -0.7033963130170576
+    },
+    {
+      "boundary_label": null,
+      "color": "black",
+      "growth_terminal": 116,
+      "id": 20,
+      "local_case": "all_out_black_vertex",
+      "x": -0.02760149776344135,
+      "y": -0.291348501785986
+    },
+    {
+      "boundary_label": null,
+      "color": "white",
+      "growth_terminal": 131,
+      "id": 21,
+      "local_case": "transmit_hourglass_adjacent_03",
+      "x": 0.5277185114333371,
+      "y": 0.5198272051958757
+    },
+    {
+      "boundary_label": null,
+      "color": "black",
+      "growth_terminal": 131,
+      "id": 22,
+      "local_case": "transmit_hourglass_adjacent_03",
+      "x": 0.2936015053756597,
+      "y": 0.4994746261310641
+    },
+    {
+      "boundary_label": null,
+      "color": "white",
+      "growth_terminal": 146,
+      "id": 23,
+      "local_case": "all_in_white_vertex",
+      "x": -0.5464910807054203,
+      "y": -0.34266146308085504
+    },
+    {
+      "boundary_label": null,
+      "color": "white",
+      "growth_terminal": 172,
+      "id": 24,
+      "local_case": "transmit_hourglass_adjacent_12",
+      "x": -0.7538835216858524,
+      "y": 0.10478566197708417
+    },
+    {
+      "boundary_label": null,
+      "color": "black",
+      "growth_terminal": 172,
+      "id": 25,
+      "local_case": "transmit_hourglass_adjacent_12",
+      "x": -0.5368939967116426,
+      "y": 0.014560687322242853
+    },
+    {
+      "boundary_label": null,
+      "color": "white",
+      "growth_terminal": 194,
+      "id": 26,
+      "local_case": "all_in_white_vertex",
+      "x": -0.11121774703692285,
+      "y": 0.19898993803345744
+    },
+    {
+      "boundary_label": null,
+      "color": "white",
+      "growth_terminal": 212,
+      "id": 27,
+      "local_case": "transmit_hourglass_adjacent_12",
+      "x": -0.36944009281359147,
+      "y": 0.7067969072958267
+    },
+    {
+      "boundary_label": null,
+      "color": "black",
+      "growth_terminal": 212,
+      "id": 28,
+      "local_case": "transmit_hourglass_adjacent_12",
+      "x": -0.16962815400214737,
+      "y": 0.5831029741042117
+    },
+    {
+      "boundary_label": null,
+      "color": "white",
+      "growth_terminal": 226,
+      "id": 29,
+      "local_case": "all_in_white_vertex",
+      "x": 0.12319761333531169,
+      "y": 0.750173730854225
+    }
+  ],
+  "schema": "hourglass_plabic_graph_v1",
+  "strand_edges_for_trips": [
+    {
+      "base_edge": 0,
+      "dst": 17,
+      "id": "h0.0",
+      "kind": "hourglass_strand",
+      "src": 16,
+      "strand": 0
+    },
+    {
+      "base_edge": 0,
+      "dst": 17,
+      "id": "h0.1",
+      "kind": "hourglass_strand",
+      "src": 16,
+      "strand": 1
+    },
+    {
+      "base_edge": 1,
+      "dst": 22,
+      "id": "h1.0",
+      "kind": "hourglass_strand",
+      "src": 21,
+      "strand": 0
+    },
+    {
+      "base_edge": 1,
+      "dst": 22,
+      "id": "h1.1",
+      "kind": "hourglass_strand",
+      "src": 21,
+      "strand": 1
+    },
+    {
+      "base_edge": 2,
+      "dst": 25,
+      "id": "h2.0",
+      "kind": "hourglass_strand",
+      "src": 24,
+      "strand": 0
+    },
+    {
+      "base_edge": 2,
+      "dst": 25,
+      "id": "h2.1",
+      "kind": "hourglass_strand",
+      "src": 24,
+      "strand": 1
+    },
+    {
+      "base_edge": 3,
+      "dst": 28,
+      "id": "h3.0",
+      "kind": "hourglass_strand",
+      "src": 27,
+      "strand": 0
+    },
+    {
+      "base_edge": 3,
+      "dst": 28,
+      "id": "h3.1",
+      "kind": "hourglass_strand",
+      "src": 27,
+      "strand": 1
+    },
+    {
+      "base_edge": 4,
+      "dst": 29,
+      "id": "e4",
+      "kind": "ordinary",
+      "src": 0,
+      "strand": null
+    },
+    {
+      "base_edge": 5,
+      "dst": 21,
+      "id": "e5",
+      "kind": "ordinary",
+      "src": 1,
+      "strand": null
+    },
+    {
+      "base_edge": 6,
+      "dst": 21,
+      "id": "e6",
+      "kind": "ordinary",
+      "src": 2,
+      "strand": null
+    },
+    {
+      "base_edge": 7,
+      "dst": 18,
+      "id": "e7",
+      "kind": "ordinary",
+      "src": 3,
+      "strand": null
+    },
+    {
+      "base_edge": 8,
+      "dst": 18,
+      "id": "e8",
+      "kind": "ordinary",
+      "src": 4,
+      "strand": null
+    },
+    {
+      "base_edge": 9,
+      "dst": 16,
+      "id": "e9",
+      "kind": "ordinary",
+      "src": 5,
+      "strand": null
+    },
+    {
+      "base_edge": 10,
+      "dst": 16,
+      "id": "e10",
+      "kind": "ordinary",
+      "src": 6,
+      "strand": null
+    },
+    {
+      "base_edge": 11,
+      "dst": 19,
+      "id": "e11",
+      "kind": "ordinary",
+      "src": 7,
+      "strand": null
+    },
+    {
+      "base_edge": 12,
+      "dst": 19,
+      "id": "e12",
+      "kind": "ordinary",
+      "src": 8,
+      "strand": null
+    },
+    {
+      "base_edge": 13,
+      "dst": 23,
+      "id": "e13",
+      "kind": "ordinary",
+      "src": 9,
+      "strand": null
+    },
+    {
+      "base_edge": 14,
+      "dst": 23,
+      "id": "e14",
+      "kind": "ordinary",
+      "src": 10,
+      "strand": null
+    },
+    {
+      "base_edge": 15,
+      "dst": 24,
+      "id": "e15",
+      "kind": "ordinary",
+      "src": 11,
+      "strand": null
+    },
+    {
+      "base_edge": 16,
+      "dst": 24,
+      "id": "e16",
+      "kind": "ordinary",
+      "src": 12,
+      "strand": null
+    },
+    {
+      "base_edge": 17,
+      "dst": 27,
+      "id": "e17",
+      "kind": "ordinary",
+      "src": 13,
+      "strand": null
+    },
+    {
+      "base_edge": 18,
+      "dst": 27,
+      "id": "e18",
+      "kind": "ordinary",
+      "src": 14,
+      "strand": null
+    },
+    {
+      "base_edge": 19,
+      "dst": 29,
+      "id": "e19",
+      "kind": "ordinary",
+      "src": 15,
+      "strand": null
+    },
+    {
+      "base_edge": 20,
+      "dst": 18,
+      "id": "e20",
+      "kind": "ordinary",
+      "src": 17,
+      "strand": null
+    },
+    {
+      "base_edge": 21,
+      "dst": 19,
+      "id": "e21",
+      "kind": "ordinary",
+      "src": 17,
+      "strand": null
+    },
+    {
+      "base_edge": 22,
+      "dst": 20,
+      "id": "e22",
+      "kind": "ordinary",
+      "src": 18,
+      "strand": null
+    },
+    {
+      "base_edge": 23,
+      "dst": 20,
+      "id": "e23",
+      "kind": "ordinary",
+      "src": 19,
+      "strand": null
+    },
+    {
+      "base_edge": 24,
+      "dst": 26,
+      "id": "e24",
+      "kind": "ordinary",
+      "src": 20,
+      "strand": null
+    },
+    {
+      "base_edge": 25,
+      "dst": 23,
+      "id": "e25",
+      "kind": "ordinary",
+      "src": 20,
+      "strand": null
+    },
+    {
+      "base_edge": 26,
+      "dst": 29,
+      "id": "e26",
+      "kind": "ordinary",
+      "src": 22,
+      "strand": null
+    },
+    {
+      "base_edge": 27,
+      "dst": 26,
+      "id": "e27",
+      "kind": "ordinary",
+      "src": 22,
+      "strand": null
+    },
+    {
+      "base_edge": 28,
+      "dst": 25,
+      "id": "e28",
+      "kind": "ordinary",
+      "src": 23,
+      "strand": null
+    },
+    {
+      "base_edge": 29,
+      "dst": 26,
+      "id": "e29",
+      "kind": "ordinary",
+      "src": 25,
+      "strand": null
+    },
+    {
+      "base_edge": 30,
+      "dst": 28,
+      "id": "e30",
+      "kind": "ordinary",
+      "src": 26,
+      "strand": null
+    },
+    {
+      "base_edge": 31,
+      "dst": 29,
+      "id": "e31",
+      "kind": "ordinary",
+      "src": 28,
+      "strand": null
+    }
+  ],
+  "trip_rule": {
+    "black_vertex": "turn to the i-th right edge in the local cyclic order",
+    "hourglass_counts_as": 2,
+    "white_vertex": "turn to the i-th left edge in the local cyclic order"
+  },
+  "word": "1121213242334344"
+}
