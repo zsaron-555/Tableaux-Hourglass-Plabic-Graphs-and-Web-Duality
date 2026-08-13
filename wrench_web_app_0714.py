@@ -27,7 +27,7 @@ ALL_FOLDER_NAME = "hourglass_disk_4x4_all_graph_data"
 ALL_FOLDER_ALIASES = (ALL_FOLDER_NAME, "4x4_All_graph_data")
 SURVIVOR_CSV_NAME = "lemma46_survivors.csv"
 PROMOTION_TABLE_PATH = Path("hourglass_disk_4x4_promotion_reps") / "promotion_orbits_4x4.tsv"
-IMAGE_EXPLORER_HTML_NAME = "web_explorer_v4 (1).html"
+IMAGE_EXPLORER_HTML_NAME = "web_explorer_v4.html"
 REP_IMAGE_FOLDER_NAME = "hourglass_disk_4x4_promotion_reps"
 PROJECT_ROOT = Path(os.environ.get("PROBLEM3_ROOT", APP_DIR)).expanduser().resolve()
 X_DIR = PROJECT_ROOT / X_FOLDER_NAME
@@ -181,7 +181,12 @@ def configure_project_root(project_root: str | Path) -> None:
     ALL_DIR = locate_all_dir(PROJECT_ROOT)
     SURVIVOR_CSV = find_named_file(SURVIVOR_CSV_NAME, PROJECT_ROOT)
     PROMOTION_TABLE = find_named_file("promotion_orbits_4x4.tsv", PROJECT_ROOT, relative=PROMOTION_TABLE_PATH)
-    IMAGE_EXPLORER_HTML = find_named_file(IMAGE_EXPLORER_HTML_NAME, PROJECT_ROOT)
+    app_explorer_html = APP_DIR / IMAGE_EXPLORER_HTML_NAME
+    IMAGE_EXPLORER_HTML = (
+        app_explorer_html
+        if app_explorer_html.exists()
+        else find_named_file(IMAGE_EXPLORER_HTML_NAME, PROJECT_ROOT)
+    )
     REP_IMAGE_DIR = find_named_dir([REP_IMAGE_FOLDER_NAME], PROJECT_ROOT) or (PROJECT_ROOT / REP_IMAGE_FOLDER_NAME)
     _SURVIVOR_CACHE = None
     _PROMOTION_ORBIT_CACHE = None

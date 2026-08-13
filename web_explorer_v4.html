@@ -8,6 +8,12 @@
   h1 { font-size: 18px; margin-bottom: 4px; }
   .subtitle { color: #666; font-size: 13px; margin-bottom: 20px; line-height: 1.6; }
   .search-row { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+  .data-row { display: flex; gap: 10px; align-items: center; margin: -6px 0 14px; flex-wrap: wrap; }
+  .data-row button { background: #168a5b; }
+  .data-row button:hover { background: #126b48; }
+  #graphDataStatus { color: #666; font-size: 12px; line-height: 1.4; }
+  #graphDataStatus.ready { color: #126b48; font-weight: bold; }
+  #graphDataStatus.missing { color: #9a5b00; }
   input[type=text] { font-family: monospace; font-size: 15px; padding: 7px 10px;
                      border: 1px solid #ccc; border-radius: 4px; width: 220px; }
   select { font-size: 14px; padding: 7px 8px; border: 1px solid #ccc; border-radius: 4px; }
@@ -95,6 +101,12 @@
   </select>
 </div>
 
+<div class="data-row">
+  <button type="button" id="chooseGraphFolder">Choose graph-data folder</button>
+  <span id="graphDataStatus">Looking for <b>4x4_All_graph_data</b> beside this webpage...</span>
+  <input id="graphFolderInput" type="file" webkitdirectory directory multiple accept=".json,application/json" hidden>
+</div>
+
 <div id="status"></div>
 
 <div class="panels">
@@ -153,6 +165,9 @@ const EMPTY_PIXEL = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs="
 const graphCache = new Map();
 const completionMemo = new Map();
 let renderGeneration = 0;
+let currentWord = null;
+let graphDirectoryHandle = null;
+let graphFilesByName = new Map();
 
 // These are the surgery channels recorded in
 // output/tsv/benzene_surgery_support_table_all_benzene_W.tsv.  A null word
@@ -340,6 +355,72 @@ function graphPath(word) {
     GRAPH_DIR + "/" + String(index).padStart(5, "0") + "_" + word + ".json";
 }
 
+function graphFileName(word) {
+  const path = graphPath(word);
+  return path ? path.slice(path.lastIndexOf("/") + 1) : null;
+}
+
+function setGraphDataStatus(message, state) {
+  const status = document.getElementById("graphDataStatus");
+  status.className = state || "";
+  status.innerHTML = message;
+}
+
+function graphUnavailableSvg(word) {
+  const safeWord = escapeSvg(word);
+  return "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 360 360'>" +
+    "<rect width='360' height='360' fill='#f6f6f6'/>" +
+    "<rect x='18' y='18' width='324' height='324' rx='8' fill='none' stroke='#d7a24a' stroke-width='2'/>" +
+    "<text x='180' y='145' text-anchor='middle' font-family='Arial,sans-serif' font-size='18' font-weight='bold' fill='#7a4b00'>Graph data needed</text>" +
+    "<text x='180' y='179' text-anchor='middle' font-family='Arial,sans-serif' font-size='13' fill='#555'>Choose the extracted</text>" +
+    "<text x='180' y='200' text-anchor='middle' font-family='Arial,sans-serif' font-size='13' fill='#555'>4x4_All_graph_data folder</text>" +
+    "<text x='180' y='238' text-anchor='middle' font-family='monospace' font-size='11' fill='#777'>" + safeWord + "</text>" +
+    "</svg>";
+}
+
+function svgDataUrl(svg) {
+  return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+}
+
+async function graphJsonFromSelectedFolder(fileName) {
+  if (graphDirectoryHandle) {
+    const fileHandle = await graphDirectoryHandle.getFileHandle(fileName);
+    const file = await fileHandle.getFile();
+    return JSON.parse(await file.text());
+  }
+  const file = graphFilesByName.get(fileName);
+  if (file) return JSON.parse(await file.text());
+  throw new Error("Selected folder does not contain " + fileName);
+}
+
+async function loadGraphJson(word) {
+  const path = graphPath(word);
+  const fileName = graphFileName(word);
+  if (!path || !fileName) throw new Error("Invalid 4x4 Yamanouchi word.");
+
+  try {
+    const response = await fetch(path);
+    if (response.ok) {
+      setGraphDataStatus("Using <b>4x4_All_graph_data</b> beside this webpage.", "ready");
+      return await response.json();
+    }
+  } catch (error) {
+    // A local file page cannot fetch a neighboring folder in every browser.
+  }
+
+  if (graphDirectoryHandle || graphFilesByName.size) {
+    const graph = await graphJsonFromSelectedFolder(fileName);
+    setGraphDataStatus("Using the selected <b>4x4_All_graph_data</b> folder.", "ready");
+    return graph;
+  }
+
+  setGraphDataStatus(
+    "Pictures need the extracted <b>4x4_All_graph_data</b> folder. Click the green button and select that folder.",
+    "missing"
+  );
+  throw new Error("Graph-data folder has not been selected.");
+}
+
 function escapeSvg(value) {
   return String(value).replace(/&/g, "&amp;")
     .replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -435,15 +516,7 @@ function graphToSvg(graph) {
 
 function exactGraphPromise(word) {
   if (graphCache.has(word)) return graphCache.get(word);
-  const path = graphPath(word);
-  const promise = path
-    ? fetch(path).then(function(response) {
-        if (!response.ok) throw new Error("Graph data not found: " + path);
-        return response.json();
-      }).then(graphToSvg).then(function(svg) {
-        return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
-      })
-    : Promise.reject(new Error("Invalid 4x4 Yamanouchi word."));
+  const promise = loadGraphJson(word).then(graphToSvg).then(svgDataUrl);
   graphCache.set(word, promise);
   return promise;
 }
@@ -458,7 +531,10 @@ function queueExactImage(image, word, generation, defer) {
         image.alt = "Exact graph for " + word;
       }
     }).catch(function() {
-      if (generation === renderGeneration) image.alt = "Exact graph unavailable for " + word;
+      if (generation === renderGeneration) {
+        image.src = svgDataUrl(graphUnavailableSvg(word));
+        image.alt = "Choose the graph-data folder to display " + word;
+      }
     });
   };
   if (defer && "IntersectionObserver" in window) {
@@ -527,19 +603,51 @@ function returnToOriginalWeb() {
   openExactWord(originalWord);
 }
 
+function promoteCatalogueWord(word, shift) {
+  const orbit = repForWord[word];
+  if (!orbit || !Array.isArray(orbit.orbit_words) || !orbit.orbit_words.length) {
+    return word;
+  }
+  const start = orbit.orbit_words.indexOf(word);
+  if (start < 0) return word;
+  const normalizedShift = ((shift % orbit.orbit_words.length) + orbit.orbit_words.length) % orbit.orbit_words.length;
+  return orbit.orbit_words[(start + normalizedShift) % orbit.orbit_words.length];
+}
+
+function transportSurgeryChannel(channel, shift) {
+  if (!channel.word) return Object.assign({}, channel);
+  const exactWord = promoteCatalogueWord(channel.word, shift);
+  const exactLookup = W2RK[exactWord];
+  return Object.assign({}, channel, {
+    word: exactWord,
+    transpose: exactLookup ? exactLookup[2] : channel.transpose,
+  });
+}
+
 function surgeryRecordForWord(w_word) {
   if (BENZENE_SURGERY[w_word]) {
-    return { channels: BENZENE_SURGERY[w_word], sourceWord: w_word, fallback: false };
+    return {
+      channels: BENZENE_SURGERY[w_word].map(function(channel) {
+        return transportSurgeryChannel(channel, 0);
+      }),
+      sourceWord: w_word,
+      promotionShift: 0,
+      fallback: false,
+    };
   }
 
   // Surgery reports are recorded for one representative of a promotion orbit,
-  // while the explorer accepts every word in that orbit.  Use the stored
-  // representative channels but keep the exact queried word for the main web.
+  // while the explorer accepts every word in that orbit. Transport every
+  // surgery output by the same promotion step as the queried presentation.
   const representative = repForWord[w_word];
   if (representative && BENZENE_SURGERY[representative.rep_word]) {
+    const promotionShift = representative.orbit_words.indexOf(w_word);
     return {
-      channels: BENZENE_SURGERY[representative.rep_word],
+      channels: BENZENE_SURGERY[representative.rep_word].map(function(channel) {
+        return transportSurgeryChannel(channel, promotionShift);
+      }),
       sourceWord: representative.rep_word,
+      promotionShift: promotionShift,
       fallback: true,
     };
   }
@@ -572,7 +680,7 @@ function renderSurgeryPanel(w_word, generation) {
   const intro = panel.querySelector(".surgery-intro");
   if (intro) {
     intro.textContent = record.fallback
-      ? "This exact web is in the promotion orbit of " + record.sourceWord + ". The stored surgery channels are shown below; the main web above remains the exact word you entered."
+      ? "This web is promotion step " + record.promotionShift + " from " + record.sourceWord + ". The stored surgery channels have been promoted by the same step, so the pictures and words below are the actual surgery outputs for the web you entered."
       : "Certified surgery outputs are shown from the stored surgery reports. Click a certified word to look up that exact web.";
   }
   list.innerHTML = "";
@@ -618,6 +726,7 @@ function showWord(w_word) {
     document.getElementById("status").textContent = "Word not found in 24,024 basis words.";
     return;
   }
+  currentWord = w_word;
   const generation = ++renderGeneration;
   const {w_rep_idx, w_k, w_rep, forks_W, t_word, t_rep_idx, t_k, t_rep, survivors} = R;
   const distinct = new Set(survivors.map(function(s){return s.x_idx;})).size;
@@ -726,6 +835,40 @@ function quickGo() {
   }
   document.getElementById("quickSelect").value = "";
 }
+
+function refreshAfterGraphFolderSelection(label) {
+  graphCache.clear();
+  setGraphDataStatus("Using selected graph-data folder: <b>" + escapeSvg(label) + "</b>.", "ready");
+  if (currentWord) showWord(currentWord);
+}
+
+async function chooseGraphDataFolder() {
+  if (window.showDirectoryPicker) {
+    try {
+      graphDirectoryHandle = await window.showDirectoryPicker({mode: "read"});
+      graphFilesByName = new Map();
+      refreshAfterGraphFolderSelection(graphDirectoryHandle.name || GRAPH_DIR);
+      return;
+    } catch (error) {
+      if (error && error.name === "AbortError") return;
+    }
+  }
+  document.getElementById("graphFolderInput").click();
+}
+
+document.getElementById("chooseGraphFolder").addEventListener("click", chooseGraphDataFolder);
+document.getElementById("graphFolderInput").addEventListener("change", function(event) {
+  graphDirectoryHandle = null;
+  graphFilesByName = new Map();
+  Array.from(event.target.files || []).forEach(function(file) {
+    if (file.name.endsWith(".json")) graphFilesByName.set(file.name, file);
+  });
+  if (graphFilesByName.size) {
+    refreshAfterGraphFolderSelection(graphFilesByName.size.toLocaleString() + " JSON files");
+  } else {
+    setGraphDataStatus("No JSON files were found in the selected folder.", "missing");
+  }
+});
 
 document.getElementById("wordInput").addEventListener("keydown", function(e) {
   if (e.key==="Enter") doSearch(); });
