@@ -49,6 +49,17 @@
   .surgery-back { margin: 0 0 8px; background: #126b48; }
   .surgery-back:hover { background: #0b4d34; }
 
+  .presentation-panel { border: 2px solid #3977a8; background: #f2f8fc; padding: 8px;
+                        box-sizing: border-box; }
+  .presentation-panel h3 { color: #255d88; }
+  .presentation-panel select { width: 100%; margin: 5px 0 7px; font-family: monospace; font-size: 11px; }
+  .presentation-action { display:block; width:100%; padding:7px 4px; margin-top:5px;
+                         border-radius:4px; box-sizing:border-box; background:#255d88;
+                         color:white; font-size:11px; font-weight:bold; text-align:center;
+                         text-decoration:none; }
+  .presentation-action[aria-disabled="true"] { background:#8ba3b5; pointer-events:none; }
+  .presentation-note { color: #536c80; font-size: 10px; line-height: 1.45; margin-top: 5px; }
+
   .survivors-panel { flex: 1; }
   .legend { font-size: 11px; color: #777; margin-bottom: 8px; line-height: 2; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px,1fr)); gap: 10px; }
@@ -102,8 +113,11 @@
 </div>
 
 <div class="data-row">
-  <button type="button" id="chooseGraphFolder">Choose graph-data folder</button>
+  <button type="button" id="chooseGraphZip">Choose downloaded ZIP</button>
+  <button type="button" id="chooseGraphFolder">Choose extracted folder</button>
+  <a href="https://github.com/zsaron-555/Tableaux-Hourglass-Plabic-Graphs-and-Web-Duality/releases/download/sl4-web-data-v1/4x4_All_graph_data_260815.zip">Download graph data</a>
   <span id="graphDataStatus">Looking for <b>4x4_All_graph_data</b> beside this webpage...</span>
+  <input id="graphZipInput" type="file" accept=".zip,application/zip" hidden>
   <input id="graphFolderInput" type="file" webkitdirectory directory multiple accept=".json,application/json" hidden>
 </div>
 
@@ -117,6 +131,16 @@
       <h3>W &nbsp;<span style="font-size:11px;color:#888;font-weight:normal">(fixed web)</span></h3>
       <img id="wImg" src="" alt="W">
       <div class="info" id="wInfo"></div>
+    </div>
+    <!-- Alternate JSON presentations in the same benzene-move class -->
+    <div class="side-panel presentation-panel" id="presentationPanel" style="display:none">
+      <h3>Benzene-move presentation</h3>
+      <div class="presentation-note">Choose the actual presentation used for the displayed web and for the pairing explorer.</div>
+      <select id="presentationSelect" onchange="selectBenzenePresentation()"></select>
+      <div class="presentation-note" id="presentationInfo"></div>
+      <div class="presentation-note" id="pairingExplorerStatus">Looking for the local pairing explorer...</div>
+      <a class="presentation-action" id="usePresentationAsW" href="#" aria-disabled="true">Use as W in pairing explorer</a>
+      <a class="presentation-action" id="usePresentationAsX" href="#" aria-disabled="true">Use as X in pairing explorer</a>
     </div>
     <!-- Benzene surgery channels for the exact queried W -->
     <div class="side-panel surgery-panel" id="surgeryPanel" style="display:none">
@@ -153,6 +177,8 @@ const byIdx  = {};
 const byWord = {};
 const repForWord = {};
 let surgeryReturnWord = null;
+let surgeryReturnPresentationPath = null;
+let pendingPresentationPath = null;
 REP_DATA.forEach(function(d) {
   byIdx[d.idx] = d;
   byWord[d.rep_word] = d;
@@ -161,6 +187,10 @@ REP_DATA.forEach(function(d) {
 
 const IMG_DIR = "hourglass_disk_4x4_promotion_reps";
 const GRAPH_DIR = "4x4_All_graph_data";
+const BENZENE_PRESENTATION_FOLDER = "benzene_move_presentations";
+const BENZENE_PRESENTATION_MANIFEST = BENZENE_PRESENTATION_FOLDER + "/manifest.json";
+const BENZENE_SURGERY_PRESENTATION_FOLDER = "benzene_surgery_presentations";
+const BENZENE_SURGERY_PRESENTATION_MANIFEST = BENZENE_SURGERY_PRESENTATION_FOLDER + "/manifest.json";
 const EMPTY_PIXEL = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
 const graphCache = new Map();
 const completionMemo = new Map();
@@ -168,6 +198,53 @@ let renderGeneration = 0;
 let currentWord = null;
 let graphDirectoryHandle = null;
 let graphFilesByName = new Map();
+let graphZipArchive = null;
+let benzeneManifestPromise = null;
+let benzeneSurgeryManifestPromise = null;
+let selectedPresentationPath = null;
+let pairingExplorerBaseUrl = null;
+
+async function discoverPairingExplorer() {
+  const candidates = [window.location.origin].concat(
+    Array.from({length: 11}, function(_, i) { return "http://127.0.0.1:" + (8765 + i); })
+  );
+  for (const base of Array.from(new Set(candidates))) {
+    try {
+      const response = await fetch(base + "/health", {cache: "no-store"});
+      if (!response.ok) continue;
+      const payload = await response.json();
+      if (payload.app === "wrench_pairing_explorer") {
+        pairingExplorerBaseUrl = base + "/";
+        updatePairingExplorerLinks();
+        return;
+      }
+    } catch (error) {
+      // This candidate is not the pairing server.
+    }
+  }
+  const status = document.getElementById("pairingExplorerStatus");
+  if (status) status.textContent = "Start wrench_web_app_0714.py, then reload this page.";
+}
+
+function updatePairingExplorerLinks() {
+  const status = document.getElementById("pairingExplorerStatus");
+  const wLink = document.getElementById("usePresentationAsW");
+  const xLink = document.getElementById("usePresentationAsX");
+  if (!status || !wLink || !xLink) return;
+  if (!pairingExplorerBaseUrl || !currentWord) {
+    wLink.setAttribute("aria-disabled", "true");
+    xLink.setAttribute("aria-disabled", "true");
+    return;
+  }
+  const graphInput = selectedPresentationPath || currentWord;
+  const wParams = new URLSearchParams({w: graphInput});
+  const xParams = new URLSearchParams({x: graphInput});
+  wLink.href = pairingExplorerBaseUrl + "?" + wParams.toString();
+  xLink.href = pairingExplorerBaseUrl + "?" + xParams.toString();
+  wLink.removeAttribute("aria-disabled");
+  xLink.removeAttribute("aria-disabled");
+  status.textContent = "Pairing explorer ready at " + pairingExplorerBaseUrl;
+}
 
 // These are the surgery channels recorded in
 // output/tsv/benzene_surgery_support_table_all_benzene_W.tsv.  A null word
@@ -366,14 +443,91 @@ function setGraphDataStatus(message, state) {
   status.innerHTML = message;
 }
 
+class RandomAccessZip {
+  constructor(file) {
+    this.file = file;
+    this.entries = new Map();
+  }
+
+  static normalizedPath(path) {
+    const clean = String(path).replace(/\\/g, "/").replace(/^\/+/, "");
+    const marker = GRAPH_DIR + "/";
+    const offset = clean.indexOf(marker);
+    return offset >= 0 ? clean.slice(offset + marker.length) : clean;
+  }
+
+  async initialize() {
+    const tailSize = Math.min(this.file.size, 65557);
+    const tailOffset = this.file.size - tailSize;
+    const tail = new Uint8Array(await this.file.slice(tailOffset).arrayBuffer());
+    let eocd = -1;
+    for (let i = tail.length - 22; i >= 0; i--) {
+      if (tail[i] === 0x50 && tail[i + 1] === 0x4b && tail[i + 2] === 0x05 && tail[i + 3] === 0x06) {
+        eocd = i;
+        break;
+      }
+    }
+    if (eocd < 0) throw new Error("This does not appear to be a standard ZIP file.");
+    const end = new DataView(tail.buffer, tail.byteOffset + eocd);
+    const entryCount = end.getUint16(10, true);
+    const centralSize = end.getUint32(12, true);
+    const centralOffset = end.getUint32(16, true);
+    const centralBytes = new Uint8Array(await this.file.slice(centralOffset, centralOffset + centralSize).arrayBuffer());
+    const decoder = new TextDecoder("utf-8");
+    let cursor = 0;
+    for (let index = 0; index < entryCount; index++) {
+      const view = new DataView(centralBytes.buffer, centralBytes.byteOffset + cursor);
+      if (view.getUint32(0, true) !== 0x02014b50) throw new Error("ZIP directory entry is malformed.");
+      const method = view.getUint16(10, true);
+      const compressedSize = view.getUint32(20, true);
+      const uncompressedSize = view.getUint32(24, true);
+      const nameLength = view.getUint16(28, true);
+      const extraLength = view.getUint16(30, true);
+      const commentLength = view.getUint16(32, true);
+      const localOffset = view.getUint32(42, true);
+      const name = decoder.decode(centralBytes.slice(cursor + 46, cursor + 46 + nameLength));
+      if (!name.endsWith("/")) {
+        const entry = {name, method, compressedSize, uncompressedSize, localOffset};
+        const normalized = RandomAccessZip.normalizedPath(name);
+        this.entries.set(normalized, entry);
+        const basename = normalized.split("/").pop();
+        if (!this.entries.has(basename)) this.entries.set(basename, entry);
+      }
+      cursor += 46 + nameLength + extraLength + commentLength;
+    }
+    return this;
+  }
+
+  async text(relativePath) {
+    const normalized = RandomAccessZip.normalizedPath(relativePath);
+    const entry = this.entries.get(normalized) || this.entries.get(normalized.split("/").pop());
+    if (!entry) throw new Error("The selected ZIP does not contain " + relativePath);
+    const header = new DataView(await this.file.slice(entry.localOffset, entry.localOffset + 30).arrayBuffer());
+    if (header.getUint32(0, true) !== 0x04034b50) throw new Error("ZIP file entry is malformed.");
+    const nameLength = header.getUint16(26, true);
+    const extraLength = header.getUint16(28, true);
+    const start = entry.localOffset + 30 + nameLength + extraLength;
+    let stream = this.file.slice(start, start + entry.compressedSize).stream();
+    if (entry.method === 8) {
+      if (typeof DecompressionStream === "undefined") {
+        throw new Error("This browser cannot open compressed ZIP entries. Choose the extracted folder instead.");
+      }
+      stream = stream.pipeThrough(new DecompressionStream("deflate-raw"));
+    } else if (entry.method !== 0) {
+      throw new Error("Unsupported ZIP compression method " + entry.method + ".");
+    }
+    return await new Response(stream).text();
+  }
+}
+
 function graphUnavailableSvg(word) {
   const safeWord = escapeSvg(word);
   return "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 360 360'>" +
     "<rect width='360' height='360' fill='#f6f6f6'/>" +
     "<rect x='18' y='18' width='324' height='324' rx='8' fill='none' stroke='#d7a24a' stroke-width='2'/>" +
     "<text x='180' y='145' text-anchor='middle' font-family='Arial,sans-serif' font-size='18' font-weight='bold' fill='#7a4b00'>Graph data needed</text>" +
-    "<text x='180' y='179' text-anchor='middle' font-family='Arial,sans-serif' font-size='13' fill='#555'>Choose the extracted</text>" +
-    "<text x='180' y='200' text-anchor='middle' font-family='Arial,sans-serif' font-size='13' fill='#555'>4x4_All_graph_data folder</text>" +
+    "<text x='180' y='179' text-anchor='middle' font-family='Arial,sans-serif' font-size='13' fill='#555'>Choose the downloaded ZIP</text>" +
+    "<text x='180' y='200' text-anchor='middle' font-family='Arial,sans-serif' font-size='13' fill='#555'>or the extracted graph-data folder</text>" +
     "<text x='180' y='238' text-anchor='middle' font-family='monospace' font-size='11' fill='#777'>" + safeWord + "</text>" +
     "</svg>";
 }
@@ -382,21 +536,25 @@ function svgDataUrl(svg) {
   return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
 }
 
-async function graphJsonFromSelectedFolder(fileName) {
+async function graphJsonFromSelectedFolder(relativePath) {
+  if (graphZipArchive) return JSON.parse(await graphZipArchive.text(relativePath));
+  const parts = String(relativePath).split("/").filter(Boolean);
   if (graphDirectoryHandle) {
-    const fileHandle = await graphDirectoryHandle.getFileHandle(fileName);
+    let directory = graphDirectoryHandle;
+    for (let i = 0; i < parts.length - 1; i++) {
+      directory = await directory.getDirectoryHandle(parts[i]);
+    }
+    const fileHandle = await directory.getFileHandle(parts[parts.length - 1]);
     const file = await fileHandle.getFile();
     return JSON.parse(await file.text());
   }
-  const file = graphFilesByName.get(fileName);
+  const file = graphFilesByName.get(relativePath) || graphFilesByName.get(parts[parts.length - 1]);
   if (file) return JSON.parse(await file.text());
-  throw new Error("Selected folder does not contain " + fileName);
+  throw new Error("Selected folder does not contain " + relativePath);
 }
 
-async function loadGraphJson(word) {
-  const path = graphPath(word);
-  const fileName = graphFileName(word);
-  if (!path || !fileName) throw new Error("Invalid 4x4 Yamanouchi word.");
+async function loadGraphJsonAt(relativePath) {
+  const path = GRAPH_DIR + "/" + relativePath;
 
   try {
     const response = await fetch(path);
@@ -408,17 +566,44 @@ async function loadGraphJson(word) {
     // A local file page cannot fetch a neighboring folder in every browser.
   }
 
-  if (graphDirectoryHandle || graphFilesByName.size) {
-    const graph = await graphJsonFromSelectedFolder(fileName);
-    setGraphDataStatus("Using the selected <b>4x4_All_graph_data</b> folder.", "ready");
+  if (graphZipArchive || graphDirectoryHandle || graphFilesByName.size) {
+    const graph = await graphJsonFromSelectedFolder(relativePath);
+    setGraphDataStatus(
+      graphZipArchive ? "Using the selected graph-data <b>ZIP</b>." : "Using the selected <b>4x4_All_graph_data</b> folder.",
+      "ready"
+    );
     return graph;
   }
 
   setGraphDataStatus(
-    "Pictures need the extracted <b>4x4_All_graph_data</b> folder. Click the green button and select that folder.",
+    "Pictures need <b>4x4_All_graph_data_260815.zip</b> or its extracted folder. Download the release ZIP, then choose it here.",
     "missing"
   );
   throw new Error("Graph-data folder has not been selected.");
+}
+
+async function loadGraphJson(word) {
+  const fileName = graphFileName(word);
+  if (!fileName) throw new Error("Invalid 4x4 Yamanouchi word.");
+  return loadGraphJsonAt(fileName);
+}
+
+async function loadBenzenePresentationManifest() {
+  if (benzeneManifestPromise) return benzeneManifestPromise;
+  benzeneManifestPromise = loadGraphJsonAt(BENZENE_PRESENTATION_MANIFEST).catch(function(error) {
+    benzeneManifestPromise = null;
+    throw error;
+  });
+  return benzeneManifestPromise;
+}
+
+async function loadBenzeneSurgeryPresentationManifest() {
+  if (benzeneSurgeryManifestPromise) return benzeneSurgeryManifestPromise;
+  benzeneSurgeryManifestPromise = loadGraphJsonAt(BENZENE_SURGERY_PRESENTATION_MANIFEST).catch(function(error) {
+    benzeneSurgeryManifestPromise = null;
+    return null;
+  });
+  return benzeneSurgeryManifestPromise;
 }
 
 function escapeSvg(value) {
@@ -521,6 +706,30 @@ function exactGraphPromise(word) {
   return promise;
 }
 
+function presentationGraphPromise(relativePath) {
+  const key = "presentation:" + relativePath;
+  if (graphCache.has(key)) return graphCache.get(key);
+  const promise = loadGraphJsonAt(relativePath).then(graphToSvg).then(svgDataUrl);
+  graphCache.set(key, promise);
+  return promise;
+}
+
+function queuePresentationImage(image, relativePath, word, generation) {
+  image.src = EMPTY_PIXEL;
+  image.alt = "Loading benzene-move presentation for " + word;
+  presentationGraphPromise(relativePath).then(function(dataUrl) {
+    if (generation === renderGeneration) {
+      image.src = dataUrl;
+      image.alt = "Benzene-move presentation for " + word;
+    }
+  }).catch(function() {
+    if (generation === renderGeneration) {
+      image.src = svgDataUrl(graphUnavailableSvg(word));
+      image.alt = "Could not load benzene-move presentation for " + word;
+    }
+  });
+}
+
 function queueExactImage(image, word, generation, defer) {
   image.src = EMPTY_PIXEL;
   image.alt = "Loading exact graph for " + word;
@@ -584,8 +793,10 @@ function computeSurvivors(w_word) {
   };
 }
 
-function openExactWord(word, returnWord) {
+function openExactWord(word, returnWord, presentationPath, returnPresentationPath) {
   surgeryReturnWord = returnWord || null;
+  surgeryReturnPresentationPath = returnPresentationPath || null;
+  pendingPresentationPath = presentationPath || null;
   document.getElementById("wordInput").value = word;
   document.getElementById("idxInput").value = "";
   document.getElementById("quickSelect").value = "";
@@ -593,14 +804,15 @@ function openExactWord(word, returnWord) {
   window.scrollTo(0, 0);
 }
 
-function openSurgeryWord(word, originalWord) {
-  openExactWord(word, originalWord);
+function openSurgeryWord(word, presentationPath, originalWord, originalPresentationPath) {
+  openExactWord(word, originalWord, presentationPath, originalPresentationPath);
 }
 
 function returnToOriginalWeb() {
   const originalWord = surgeryReturnWord;
   if (!originalWord) return;
-  openExactWord(originalWord);
+  const originalPresentationPath = surgeryReturnPresentationPath;
+  openExactWord(originalWord, null, originalPresentationPath, null);
 }
 
 function promoteCatalogueWord(word, shift) {
@@ -654,11 +866,32 @@ function surgeryRecordForWord(w_word) {
   return null;
 }
 
-function renderSurgeryPanel(w_word, generation) {
+function exactDisplayedPresentationPath(w_word) {
+  return selectedPresentationPath || pendingPresentationPath || graphFileName(w_word);
+}
+
+function surgeryChannelLabel(channel, index) {
+  const raw = channel.channel_type || channel.channel || ("channel " + (index + 1));
+  return String(raw).replace(/_/g, " ");
+}
+
+async function renderSurgeryPanel(w_word, generation) {
   const panel = document.getElementById("surgeryPanel");
   const list = document.getElementById("surgeryList");
   const backButton = document.getElementById("backToOriginalButton");
-  const record = surgeryRecordForWord(w_word);
+  const sourceJson = exactDisplayedPresentationPath(w_word);
+  const surgeryManifest = await loadBenzeneSurgeryPresentationManifest();
+  if (generation !== renderGeneration || w_word !== currentWord) return;
+  const exactEntry = surgeryManifest && (surgeryManifest.entries || []).find(function(item) {
+    return item.source_json === sourceJson;
+  });
+  const record = exactEntry ? {
+    channels: exactEntry.channels || [],
+    sourceWord: w_word,
+    sourceJson: sourceJson,
+    exactPresentation: true,
+    fallback: false,
+  } : surgeryRecordForWord(w_word);
   if (!record) {
     list.innerHTML = "";
     if (surgeryReturnWord) {
@@ -679,45 +912,142 @@ function renderSurgeryPanel(w_word, generation) {
   if (backButton) backButton.style.display = surgeryReturnWord ? "inline-block" : "none";
   const intro = panel.querySelector(".surgery-intro");
   if (intro) {
-    intro.textContent = record.fallback
+    intro.textContent = record.exactPresentation
+      ? "Surgery is computed from the exact presentation displayed above (" + record.sourceJson + "). Click a certified output to inspect that exact resulting presentation."
+      : record.fallback
       ? "This web is promotion step " + record.promotionShift + " from " + record.sourceWord + ". The stored surgery channels have been promoted by the same step, so the pictures and words below are the actual surgery outputs for the web you entered."
-      : "Certified surgery outputs are shown from the stored surgery reports. Click a certified word to look up that exact web.";
+      : "This is the older word-level surgery record. Select graph data containing the presentation-aware surgery manifest for exact-presentation surgery.";
   }
   list.innerHTML = "";
   record.channels.forEach(function(channel, index) {
     const card = document.createElement("div");
-    card.className = channel.word ? "surgery-card" : "surgery-card surgery-uncertified";
+    const certified = channel.certified !== false && Boolean(channel.word);
+    card.className = certified ? "surgery-card" : "surgery-card surgery-uncertified";
     const title = document.createElement("div");
     title.className = "surgery-channel";
-    title.textContent = "Channel " + (index + 1) + ": " + channel.channel;
+    title.textContent = "Channel " + (index + 1) + ": " + surgeryChannelLabel(channel, index);
     card.appendChild(title);
 
-    if (channel.word) {
+    if (certified) {
       const image = document.createElement("img");
       image.loading = "lazy";
       image.alt = "Surgery web " + channel.word;
       card.appendChild(image);
-      queueExactImage(image, channel.word, generation, false);
+      if (channel.json) {
+        queuePresentationImage(image, channel.json, channel.word, generation);
+      } else {
+        queueExactImage(image, channel.word, generation, false);
+      }
 
       const link = document.createElement("span");
       link.className = "surgery-word";
       link.textContent = "Surgery(W) = " + channel.word;
       link.title = "Look up this exact surgery web";
-      link.onclick = function() { openSurgeryWord(channel.word, w_word); };
+      link.onclick = function() {
+        openSurgeryWord(channel.word, channel.json || null, w_word, sourceJson);
+      };
       card.appendChild(link);
 
       const transpose = document.createElement("div");
       transpose.className = "surgery-note";
       transpose.textContent = "(Surgery(W))^T = " + channel.transpose;
       card.appendChild(transpose);
+      if (channel.identification_mode) {
+        const certification = document.createElement("div");
+        certification.className = "surgery-note";
+        certification.textContent = "Certified from the expanded catalogue by " +
+          String(channel.identification_mode).replace(/_/g, " ") + ".";
+        card.appendChild(certification);
+      }
     } else {
       const note = document.createElement("div");
       note.className = "surgery-note";
-      note.textContent = channel.note;
+      note.textContent = channel.note || "No unique expanded-catalogue presentation was certified for this surgery output.";
       card.appendChild(note);
     }
     list.appendChild(card);
   });
+}
+
+async function renderBenzenePresentationPanel(word, generation) {
+  const panel = document.getElementById("presentationPanel");
+  const select = document.getElementById("presentationSelect");
+  const info = document.getElementById("presentationInfo");
+  selectedPresentationPath = null;
+  panel.style.display = "none";
+  select.innerHTML = "";
+  info.textContent = "";
+  try {
+    const manifest = await loadBenzenePresentationManifest();
+    if (generation !== renderGeneration) return;
+    const alternatives = (manifest.files || []).filter(function(item) {
+      return item.word === word;
+    }).sort(function(a, b) {
+      return a.presentation - b.presentation;
+    });
+    if (!alternatives.length) return;
+
+    const classSizeByRepresentative = new Map((manifest.classes || []).map(function(item) {
+      return [Number(item.representative_index), Number(item.class_size)];
+    }));
+    const catalogue = document.createElement("option");
+    catalogue.value = "";
+    catalogue.textContent = "Catalogue presentation";
+    select.appendChild(catalogue);
+    alternatives.forEach(function(item) {
+      const option = document.createElement("option");
+      option.value = item.json;
+      option.dataset.presentation = String(item.presentation);
+      option.dataset.moveCount = String(item.move_count);
+      const classSize = Number(item.class_size || classSizeByRepresentative.get(Number(item.representative_index)) || 0);
+      if (item.presentation === 1) {
+        option.textContent = "Single benzene move (rest unchanged)";
+      } else if (item.presentation === 2 && classSize === 3) {
+        option.textContent = "Benzene chain reaction (second move)";
+      } else {
+        option.textContent = "Benzene presentation " + item.presentation;
+      }
+      select.appendChild(option);
+    });
+    info.textContent = alternatives.length + " noncatalogue presentation" +
+      (alternatives.length === 1 ? "" : "s") + " available for this exact promoted word.";
+    panel.style.display = "block";
+    if (pendingPresentationPath) {
+      const requested = Array.from(select.options).find(function(option) {
+        return option.value === pendingPresentationPath;
+      });
+      if (requested) {
+        select.value = pendingPresentationPath;
+        pendingPresentationPath = null;
+        selectBenzenePresentation();
+      } else {
+        pendingPresentationPath = null;
+      }
+    }
+    updatePairingExplorerLinks();
+  } catch (error) {
+    if (generation !== renderGeneration) return;
+    info.textContent = "Generate benzene_move_presentations/manifest.json to enable presentation switching.";
+    panel.style.display = "block";
+  }
+}
+
+function selectBenzenePresentation() {
+  const select = document.getElementById("presentationSelect");
+  const selected = select.options[select.selectedIndex];
+  selectedPresentationPath = select.value || null;
+  if (!currentWord) return;
+  if (selectedPresentationPath) {
+    queuePresentationImage(document.getElementById("wImg"), selectedPresentationPath, currentWord, renderGeneration);
+    document.getElementById("presentationInfo").textContent =
+      "Displaying presentation " + selected.dataset.presentation + "; Yamanouchi word remains " + currentWord + ".";
+  } else {
+    queueExactImage(document.getElementById("wImg"), currentWord, renderGeneration);
+    document.getElementById("presentationInfo").textContent =
+      "Displaying the catalogue presentation for " + currentWord + ".";
+  }
+  updatePairingExplorerLinks();
+  renderSurgeryPanel(currentWord, renderGeneration);
 }
 
 function showWord(w_word) {
@@ -727,6 +1057,7 @@ function showWord(w_word) {
     return;
   }
   currentWord = w_word;
+  updatePairingExplorerLinks();
   const generation = ++renderGeneration;
   const {w_rep_idx, w_k, w_rep, forks_W, t_word, t_rep_idx, t_k, t_rep, survivors} = R;
   const distinct = new Set(survivors.map(function(s){return s.x_idx;})).size;
@@ -743,6 +1074,7 @@ function showWord(w_word) {
     "<br><small>Displayed graph: exact queried word</small>" +
     "<br>forks(W) = [" + forks_W.join(", ") + "]" +
     "<br>Pairs: <b>" + survivors.length + "</b> | Orbits: <b>" + distinct + "</b>";
+  renderBenzenePresentationPanel(w_word, generation);
   renderSurgeryPanel(w_word, generation);
 
   // ── W* panel ──
@@ -813,6 +1145,8 @@ function showWord(w_word) {
 
 function doSearch() {
   surgeryReturnWord = null;
+  surgeryReturnPresentationPath = null;
+  pendingPresentationPath = null;
   const w = document.getElementById("wordInput").value.trim();
   const i = document.getElementById("idxInput").value.trim();
   if (w) { showWord(w); }
@@ -825,6 +1159,8 @@ function doSearch() {
 
 function quickGo() {
   surgeryReturnWord = null;
+  surgeryReturnPresentationPath = null;
+  pendingPresentationPath = null;
   const v = document.getElementById("quickSelect").value;
   if (!v) return;
   if (v.length === 16) { document.getElementById("wordInput").value = v; showWord(v); }
@@ -838,14 +1174,29 @@ function quickGo() {
 
 function refreshAfterGraphFolderSelection(label) {
   graphCache.clear();
-  setGraphDataStatus("Using selected graph-data folder: <b>" + escapeSvg(label) + "</b>.", "ready");
+  benzeneManifestPromise = null;
+  benzeneSurgeryManifestPromise = null;
+  setGraphDataStatus("Using selected graph data: <b>" + escapeSvg(label) + "</b>.", "ready");
   if (currentWord) showWord(currentWord);
+}
+
+async function chooseGraphDataZip(file) {
+  setGraphDataStatus("Opening <b>" + escapeSvg(file.name) + "</b>...", "");
+  const archive = await new RandomAccessZip(file).initialize();
+  if (!archive.entries.has(BENZENE_PRESENTATION_MANIFEST)) {
+    throw new Error("This ZIP is missing " + BENZENE_PRESENTATION_MANIFEST + ". Please use 4x4_All_graph_data_260815.zip.");
+  }
+  graphZipArchive = archive;
+  graphDirectoryHandle = null;
+  graphFilesByName = new Map();
+  refreshAfterGraphFolderSelection(file.name + " (" + archive.entries.size.toLocaleString() + " indexed files)");
 }
 
 async function chooseGraphDataFolder() {
   if (window.showDirectoryPicker) {
     try {
       graphDirectoryHandle = await window.showDirectoryPicker({mode: "read"});
+      graphZipArchive = null;
       graphFilesByName = new Map();
       refreshAfterGraphFolderSelection(graphDirectoryHandle.name || GRAPH_DIR);
       return;
@@ -857,11 +1208,30 @@ async function chooseGraphDataFolder() {
 }
 
 document.getElementById("chooseGraphFolder").addEventListener("click", chooseGraphDataFolder);
+document.getElementById("chooseGraphZip").addEventListener("click", function() {
+  document.getElementById("graphZipInput").click();
+});
+document.getElementById("graphZipInput").addEventListener("change", async function(event) {
+  const file = (event.target.files || [])[0];
+  if (!file) return;
+  try {
+    await chooseGraphDataZip(file);
+  } catch (error) {
+    graphZipArchive = null;
+    setGraphDataStatus(escapeSvg(error.message || String(error)), "missing");
+  } finally {
+    event.target.value = "";
+  }
+});
 document.getElementById("graphFolderInput").addEventListener("change", function(event) {
+  graphZipArchive = null;
   graphDirectoryHandle = null;
   graphFilesByName = new Map();
   Array.from(event.target.files || []).forEach(function(file) {
-    if (file.name.endsWith(".json")) graphFilesByName.set(file.name, file);
+    if (!file.name.endsWith(".json")) return;
+    graphFilesByName.set(file.name, file);
+    const relative = String(file.webkitRelativePath || "").split("/").slice(1).join("/");
+    if (relative) graphFilesByName.set(relative, file);
   });
   if (graphFilesByName.size) {
     refreshAfterGraphFolderSelection(graphFilesByName.size.toLocaleString() + " JSON files");
@@ -874,6 +1244,7 @@ document.getElementById("wordInput").addEventListener("keydown", function(e) {
   if (e.key==="Enter") doSearch(); });
 document.getElementById("idxInput").addEventListener("keydown", function(e) {
   if (e.key==="Enter") doSearch(); });
+discoverPairingExplorer();
 </script>
 </body>
 </html>
