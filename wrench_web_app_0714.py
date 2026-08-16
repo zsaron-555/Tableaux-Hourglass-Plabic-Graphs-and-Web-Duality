@@ -28,6 +28,8 @@ ALL_FOLDER_ALIASES = (ALL_FOLDER_NAME, "4x4_All_graph_data")
 SURVIVOR_CSV_NAME = "lemma46_survivors.csv"
 PROMOTION_TABLE_PATH = Path("hourglass_disk_4x4_promotion_reps") / "promotion_orbits_4x4.tsv"
 IMAGE_EXPLORER_HTML_NAME = "web_explorer_v4.html"
+IMAGE_EXPLORER_ROUTE = f"/{IMAGE_EXPLORER_HTML_NAME}"
+SURVIVOR_EXPLORER_URL = os.environ.get("PROBLEM3_SURVIVOR_EXPLORER_URL", "").strip()
 REP_IMAGE_FOLDER_NAME = "hourglass_disk_4x4_promotion_reps"
 PROJECT_ROOT = Path(os.environ.get("PROBLEM3_ROOT", APP_DIR)).expanduser().resolve()
 X_DIR = PROJECT_ROOT / X_FOLDER_NAME
@@ -181,12 +183,7 @@ def configure_project_root(project_root: str | Path) -> None:
     ALL_DIR = locate_all_dir(PROJECT_ROOT)
     SURVIVOR_CSV = find_named_file(SURVIVOR_CSV_NAME, PROJECT_ROOT)
     PROMOTION_TABLE = find_named_file("promotion_orbits_4x4.tsv", PROJECT_ROOT, relative=PROMOTION_TABLE_PATH)
-    app_explorer_html = APP_DIR / IMAGE_EXPLORER_HTML_NAME
-    IMAGE_EXPLORER_HTML = (
-        app_explorer_html
-        if app_explorer_html.exists()
-        else find_named_file(IMAGE_EXPLORER_HTML_NAME, PROJECT_ROOT)
-    )
+    IMAGE_EXPLORER_HTML = find_named_file(IMAGE_EXPLORER_HTML_NAME, PROJECT_ROOT)
     REP_IMAGE_DIR = find_named_dir([REP_IMAGE_FOLDER_NAME], PROJECT_ROOT) or (PROJECT_ROOT / REP_IMAGE_FOLDER_NAME)
     _SURVIVOR_CACHE = None
     _PROMOTION_ORBIT_CACHE = None
@@ -284,11 +281,69 @@ def graph_index(path: Path) -> int:
 
 
 def graph_word(path: Path) -> str:
+    data = load_json(path)
+    word = data.get("word") or data.get("metadata", {}).get("word")
+    if isinstance(word, str) and len(word) == 16 and set(word) <= set("1234"):
+        return word
     stem = path.stem
     if "_" in stem:
-        return stem.split("_", 1)[1]
-    data = load_json(path)
-    return str(data.get("metadata", {}).get("word", stem))
+        candidate = stem.split("_", 1)[1][:16]
+        if len(candidate) == 16 and set(candidate) <= set("1234"):
+            return candidate
+    return str(word or stem)
+
+
+def benzene_presentation_options(value: str, side: str) -> Dict[str, Any]:
+    """Return catalogue and benzene-moved JSON choices for one web input."""
+    if not value.strip():
+        return {"word": "", "selected": "", "options": []}
+    try:
+        path = resolve_graph(value, side)
+        word = graph_word(path)
+    except Exception as exc:  # noqa: BLE001 - returned as a small UI diagnostic.
+        return {"word": "", "selected": "", "options": [], "error": str(exc)}
+
+    selected = ""
+    try:
+        relative = path.resolve().relative_to(ALL_DIR.resolve())
+        if relative.parts and relative.parts[0] == "benzene_move_presentations":
+            selected = relative.as_posix()
+    except ValueError:
+        pass
+
+    manifest_path = ALL_DIR / "benzene_move_presentations" / "manifest.json"
+    options: List[Dict[str, Any]] = [
+        {
+            "value": word,
+            "label": f"Catalogue presentation ({word})",
+            "presentation": 0,
+            "move_count": 0,
+        }
+    ]
+    if manifest_path.is_file():
+        manifest = load_json(manifest_path)
+        entries = sorted(
+            (entry for entry in manifest.get("files", []) if entry.get("word") == word),
+            key=lambda entry: (int(entry.get("presentation", 0)), str(entry.get("json", ""))),
+        )
+        for entry in entries:
+            presentation = int(entry.get("presentation", 0))
+            move_count = int(entry.get("move_count", 0))
+            if move_count == 1:
+                label = "Single benzene move (rest unchanged)"
+            elif move_count > 1:
+                label = f"Benzene chain reaction ({move_count} moves)"
+            else:
+                label = f"Benzene presentation {presentation}"
+            options.append(
+                {
+                    "value": str(entry["json"]),
+                    "label": label,
+                    "presentation": presentation,
+                    "move_count": move_count,
+                }
+            )
+    return {"word": word, "selected": selected or word, "options": options}
 
 
 def promotion_orbit_words_by_index() -> Dict[int, List[str]]:
@@ -755,8 +810,6 @@ def image_explorer_page() -> str:
             """,
         )
     text = IMAGE_EXPLORER_HTML.read_text(encoding="utf-8")
-    if "<base " not in text and "<head>" in text:
-        text = text.replace("<head>", '<head>\n<base href="/">', 1)
     nav = """
     <div style="margin:0 0 14px 0;padding:10px 12px;background:#eef5ff;border:1px solid #cbd8ea;border-radius:6px;font-family:Arial,Helvetica,sans-serif;font-size:14px">
       <a href="/" style="color:#17202a;font-weight:bold;text-decoration:none">Wrench Pairing Explorer</a>
@@ -3018,16 +3071,20 @@ def render_coloring_section(
                 out.append({"white": int(item[0]), "black": int(item[1])})
         return out
 
-    def color_maps(ev: Dict[str, Any]) -> Tuple[Dict[Tuple[int, int], str], Dict[Tuple[int, int], Tuple[str, str]]]:
+    def color_maps(
+        ev: Dict[str, Any],
+        edge_key: str = "sample_edge_colors",
+        hourglass_key: str = "sample_hourglass_colors",
+    ) -> Tuple[Dict[Tuple[int, int], str], Dict[Tuple[int, int], Tuple[str, str]]]:
         edge_colors: Dict[Tuple[int, int], str] = {}
         hourglass_colors: Dict[Tuple[int, int], Tuple[str, str]] = {}
-        for item in ev.get("sample_edge_colors", []):
+        for item in ev.get(edge_key, []):
             edge = item.get("edge", [])
             if len(edge) != 2:
                 continue
             color = COLORS.get(int(item.get("color", 0)), "#111")
             edge_colors[tuple(sorted((int(edge[0]), int(edge[1]))))] = color
-        for item in ev.get("sample_hourglass_colors", []):
+        for item in ev.get(hourglass_key, []):
             edge = item.get("edge", [])
             colors = item.get("colors", [])
             if len(edge) != 2 or len(colors) != 2:
@@ -3045,6 +3102,23 @@ def render_coloring_section(
             if label in label_to_node:
                 rings[label_to_node[label]] = COLORS.get(int(color), "#111")
         return rings
+
+    def conflict_text(conflict: Dict[str, Any]) -> str:
+        kind = str(conflict.get("kind", conflict.get("type", "coloring_conflict")))
+        node = conflict.get("vertex", conflict.get("node"))
+        edge = conflict.get("edge")
+        if kind == "vertex_color_conflict":
+            return f"Vertex {node} repeats one or more colors on its four incident strands."
+        if kind == "hourglass_color_conflict":
+            return f"The two strands of hourglass {edge} received the same color."
+        if kind == "fixed_boundary_conflict":
+            return f"The fixed boundary-edge colors conflict at internal vertex {node}."
+        if kind == "missing_boundary_color":
+            label = conflict.get("boundary_label", node)
+            return f"Boundary label {label} has no prescribed component color."
+        if kind == "wrong_degree":
+            return f"Vertex {node} does not have four incident strands in this terminal state."
+        return str(conflict.get("message") or kind.replace("_", " "))
 
     computed = [ev for ev in evaluations if ev.get("term_value") is not None]
     if computed:
@@ -3073,7 +3147,6 @@ def render_coloring_section(
             continue
 
         condition = {int(k): int(v) for k, v in ev.get("boundary_color_by_label", {}).items()}
-        edge_colors, hg_colors = color_maps(ev)
         source = str(ev.get("source_side", "X_components"))
         colored_side = str(ev.get("colored_side", "W"))
         x_adj = as_adj(ev.get("source_adj"), final_x) if source in {"X", "X_components"} else final_x
@@ -3082,13 +3155,121 @@ def render_coloring_section(
         w_hgs = as_hourglasses(ev.get("colored_hourglasses")) if colored_side == "W" else final_wh
         x_rings = boundary_rings(x_graph, condition) if source in {"X", "X_components"} else {}
         w_rings = boundary_rings(w_graph, condition) if source == "W" else {}
-        w_edge_colors = edge_colors if colored_side == "W" else {}
-        x_edge_colors = edge_colors if colored_side == "X" else {}
-        w_hg_colors = hg_colors if colored_side == "W" else {}
-        x_hg_colors = hg_colors if colored_side == "X" else {}
         history = list(ev.get("history", []))
         x_curves = wrench.edge_curves_from_history(history, "X", x_adj)
         w_curves = wrench.edge_curves_from_history(history, "W", w_adj)
+
+        count = int(ev.get("coloring_count", ev.get("count", 0)) or 0)
+        count_is_exact = bool(ev.get("count_is_exact", True))
+        samples = [item for item in ev.get("coloring_samples", []) if isinstance(item, dict)]
+        if count > 0 and not samples and ev.get("sample_edge_colors") is not None:
+            samples = [
+                {
+                    "sample_edge_colors": ev.get("sample_edge_colors", []),
+                    "sample_hourglass_colors": ev.get("sample_hourglass_colors", []),
+                }
+            ]
+
+        if count_is_exact:
+            count_sentence = f"W has exactly {count} proper coloring{'s' if count != 1 else ''}."
+        else:
+            count_sentence = f"At least {count} proper W colorings were found before the search limit."
+
+        x_picture = draw_web_svg(
+            "X: boundary component colors",
+            x_graph,
+            x_adj,
+            x_hgs,
+            node_ring_colors=x_rings,
+            edge_curves=x_curves,
+            subtitle="only boundary vertices are colored",
+        )
+
+        if samples:
+            first_edges, first_hgs = color_maps(samples[0])
+            first_w = draw_web_svg(
+                "W: proper edge coloring 1",
+                w_graph,
+                w_adj,
+                w_hgs,
+                edge_colors=first_edges,
+                hourglass_colors=first_hgs,
+                node_ring_colors=w_rings,
+                edge_curves=w_curves,
+                subtitle="compatible with the boundary component colors of X",
+            )
+            extra_samples = []
+            for sample_index, sample in enumerate(samples[1:], start=2):
+                sample_edges, sample_hgs = color_maps(sample)
+                extra_samples.append(
+                    draw_web_svg(
+                        f"W: proper edge coloring {sample_index}",
+                        w_graph,
+                        w_adj,
+                        w_hgs,
+                        edge_colors=sample_edges,
+                        hourglass_colors=sample_hgs,
+                        node_ring_colors=w_rings,
+                        edge_curves=w_curves,
+                        subtitle="a distinct compatible coloring",
+                    )
+                )
+            if len(samples) < count:
+                gallery_note = (
+                    f'<p class="muted">Showing {len(samples)} retained witnesses out of '
+                    f'{count} proper colorings.</p>'
+                )
+            else:
+                gallery_note = f'<p class="muted">All {len(samples)} proper colorings are shown.</p>'
+            extra_gallery = (
+                f'<div class="coloring-gallery">{"".join(extra_samples)}</div>'
+                if extra_samples
+                else ""
+            )
+            coloring_pictures = (
+                f'<div class="grid two">{first_w}{x_picture}</div>{gallery_note}{extra_gallery}'
+            )
+            conflict_panel = ""
+        else:
+            best_edges, best_hgs = color_maps(
+                ev,
+                "best_effort_edge_colors",
+                "best_effort_hourglass_colors",
+            )
+            conflict_edges = {
+                tuple(sorted((int(edge[0]), int(edge[1])))): "#d62828"
+                for edge in ev.get("conflict_edges", [])
+                if isinstance(edge, (list, tuple)) and len(edge) == 2
+            }
+            conflict_rings = dict(w_rings)
+            for node in ev.get("conflict_nodes", []):
+                conflict_rings[int(node)] = "#d62828"
+            attempted_w = draw_web_svg(
+                "W: closest attempted edge coloring",
+                w_graph,
+                w_adj,
+                w_hgs,
+                edge_colors=best_edges,
+                hourglass_colors=best_hgs,
+                node_ring_colors=conflict_rings,
+                highlight_edges=conflict_edges,
+                edge_curves=w_curves,
+                subtitle="no proper coloring; conflicts are marked in red",
+            )
+            coloring_pictures = f'<div class="grid two">{attempted_w}{x_picture}</div>'
+            conflicts = [item for item in ev.get("coloring_conflicts", []) if isinstance(item, dict)]
+            if conflicts:
+                conflict_items = "".join(
+                    f'<div class="conflict-item">{html.escape(conflict_text(item))}</div>'
+                    for item in conflicts
+                )
+            else:
+                conflict_items = '<div class="conflict-item">No valid completion of the partial edge coloring was found.</div>'
+            conflict_panel = (
+                '<div class="conflict-list"><strong>Why the attempted coloring fails</strong>'
+                f'{conflict_items}</div>'
+            )
+
         cards.append(
             f"""
             <div class="factor-box">
@@ -3097,11 +3278,10 @@ def render_coloring_section(
               <p><strong>Tagged source-orientation sign:</strong> {html.escape(str(ev.get('source_orientation_sign', 1)))}</p>
               <p><strong>Coloring count:</strong> {html.escape(str(ev.get('coloring_count')))}</p>
               <p><strong>Contribution:</strong> {html.escape(str(ev.get('term_value')))}</p>
+              <p class="coloring-audit"><strong>{html.escape(count_sentence)}</strong></p>
               <p class="muted">Hourglass strands use unordered distinct color pairs; swapping the two hourglass strand colors is not counted again.</p>
-              <div class="grid two">
-                {draw_web_svg('W: compatible edge coloring', w_graph, w_adj, w_hgs, edge_colors=w_edge_colors, hourglass_colors=w_hg_colors, node_ring_colors=w_rings, edge_curves=w_curves, subtitle='edge-colored from X boundary components')}
-                {draw_web_svg('X: boundary component colors', x_graph, x_adj, x_hgs, edge_colors=x_edge_colors, hourglass_colors=x_hg_colors, node_ring_colors=x_rings, edge_curves=x_curves, subtitle='only boundary vertices are colored')}
-              </div>
+              {coloring_pictures}
+              {conflict_panel}
             </div>
             """
         )
@@ -3142,6 +3322,8 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
     has_visible_manual_pair = bool(params.get("w", "").strip() and params.get("x", "").strip())
     use_transpose = "checked" if params.get("use_transpose") == "1" and not has_visible_manual_pair else ""
     survivor_menu = survivor_selector_html(params)
+    survivor_href = html.escape(SURVIVOR_EXPLORER_URL or IMAGE_EXPLORER_ROUTE, quote=True)
+    survivor_label = "Open web explorer"
     return f"""<!doctype html>
 <html>
 <head>
@@ -3157,10 +3339,14 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
     h2 {{ margin:0 0 10px; font-size:20px; }}
     h3 {{ margin:0 0 8px; font-size:17px; }}
     p {{ margin:6px 0; }}
-    form {{ display:grid; grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr) 120px 120px 180px 150px 150px 150px 150px 130px; gap:12px; align-items:end; margin-top:18px; }}
+    form {{ display:grid; grid-template-columns: minmax(280px, 1fr) minmax(280px, 1fr) 120px 120px 180px 150px 150px 150px 150px 130px; gap:12px; align-items:end; margin-top:18px; }}
     label {{ display:flex; flex-direction:column; gap:6px; color:var(--muted); font-size:13px; }}
     input[type=text], input[type=number], select {{ padding:10px 11px; border:1px solid var(--line); border-radius:7px; font-size:14px; background:#fff; color:var(--ink); }}
     select {{ width:100%; }}
+    .web-input-group {{ display:flex; flex-direction:column; gap:8px; min-width:0; }}
+    .presentation-choice {{ padding:8px; border:1px solid #b8d3e8; border-radius:7px; background:#f2f8fc; }}
+    .presentation-choice select {{ padding:8px 9px; font-size:13px; }}
+    .presentation-choice .presentation-status {{ min-height:15px; color:#536c80; font-size:11px; }}
     .check {{ flex-direction:row; align-items:center; gap:9px; padding-bottom:10px; }}
     button.tiny {{ height:auto; padding:6px 9px; border-radius:6px; font-size:12px; }}
     .tiny-link, .branch-link {{ display:inline-block; padding:6px 9px; border-radius:6px; background:var(--ink); color:#fff; text-decoration:none; font-size:12px; }}
@@ -3187,6 +3373,10 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
     .grid {{ display:grid; gap:14px; }}
     .grid.four {{ grid-template-columns: repeat(4, minmax(260px, 1fr)); }}
     .grid.two {{ grid-template-columns: repeat(2, minmax(330px, 1fr)); }}
+    .coloring-gallery {{ display:grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap:14px; margin-top:14px; }}
+    .coloring-audit {{ margin:10px 0; padding:9px 11px; border-left:4px solid var(--green); background:#edf8f2; }}
+    .conflict-list {{ margin-top:14px; padding:12px 14px; border:1px solid #efb4b4; border-radius:7px; background:#fff4f4; }}
+    .conflict-item {{ margin-top:7px; color:#8d1f1f; font-size:13px; }}
     .web-card, .pair-card {{ border:1px solid var(--line); border-radius:8px; padding:10px; background:#fff; min-width:0; }}
     .web-title, .pair-title {{ text-align:center; font-weight:bold; margin-bottom:4px; }}
     .web-subtitle, .pair-note {{ text-align:center; min-height:18px; }}
@@ -3216,10 +3406,22 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
   <header>
     <h1>Wrench Pairing Explorer</h1>
     <p class="muted">Enter W and X directly. They do not need to be transposes of each other.</p>
-    <p class="muted"><a href="/image-explorer">Open image survivor explorer</a></p>
+    <p class="muted"><a href="{survivor_href}" target="_blank" rel="noopener">{survivor_label}</a></p>
     <form method="get" action="/run">
-      <label>W web index, word, or JSON file<input id="w-input" name="w" type="text" value="{w}" placeholder="0447_1231423121323444.json"></label>
-      <label>X web index, word, or JSON file<input id="x-input" name="x" type="text" value="{x}" placeholder="0447_1112122334344234.json"></label>
+      <div class="web-input-group">
+        <label>W web index, word, or JSON file<input id="w-input" name="w" type="text" value="{w}" placeholder="0447_1231423121323444.json"></label>
+        <label class="presentation-choice">Actual W presentation
+          <select id="w-presentation-select" disabled><option>Loading presentations...</option></select>
+          <span class="presentation-status" id="w-presentation-status"></span>
+        </label>
+      </div>
+      <div class="web-input-group">
+        <label>X web index, word, or JSON file<input id="x-input" name="x" type="text" value="{x}" placeholder="0447_1112122334344234.json"></label>
+        <label class="presentation-choice">Actual X presentation
+          <select id="x-presentation-select" disabled><option>Loading presentations...</option></select>
+          <span class="presentation-status" id="x-presentation-status"></span>
+        </label>
+      </div>
       <label>Step cap, optional<input name="max_steps" type="number" value="{max_steps}" min="0" placeholder="auto"></label>
       <label>Beam width<input name="beam_width" type="number" value="{beam}" min="1"></label>
       <label class="check muted"><input type="checkbox" disabled> W is passive; apply relations only to X</label>
@@ -3250,6 +3452,57 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
     const survivorSlot = document.getElementById('survivor-menu-slot');
     const wInput = document.getElementById('w-input');
     const xInput = document.getElementById('x-input');
+    const wPresentationSelect = document.getElementById('w-presentation-select');
+    const xPresentationSelect = document.getElementById('x-presentation-select');
+
+    async function refreshPresentationMenu(side) {{
+      const normalized = side.toLowerCase();
+      const input = normalized === 'w' ? wInput : xInput;
+      const select = normalized === 'w' ? wPresentationSelect : xPresentationSelect;
+      const status = document.getElementById(normalized + '-presentation-status');
+      if (!input || !select || !status) return;
+      const value = input.value.trim();
+      select.disabled = true;
+      select.innerHTML = '<option>Loading presentations...</option>';
+      status.textContent = '';
+      if (!value) {{
+        select.innerHTML = '<option>Enter a web first</option>';
+        return;
+      }}
+      try {{
+        const response = await fetch('/presentations?side=' + side.toUpperCase() + '&value=' + encodeURIComponent(value), {{cache: 'no-store'}});
+        const payload = await response.json();
+        if (!response.ok || payload.error) throw new Error(payload.error || 'Could not load presentations');
+        select.innerHTML = '';
+        (payload.options || []).forEach((item) => {{
+          const option = document.createElement('option');
+          option.value = item.value;
+          option.textContent = item.label;
+          option.selected = item.value === payload.selected;
+          select.appendChild(option);
+        }});
+        select.disabled = !select.options.length;
+        const alternatives = Math.max(0, (payload.options || []).length - 1);
+        status.textContent = alternatives
+          ? alternatives + ' benzene-moved presentation' + (alternatives === 1 ? '' : 's') + ' available.'
+          : 'Only the catalogue presentation is available.';
+      }} catch (error) {{
+        select.innerHTML = '<option>Presentations unavailable</option>';
+        status.textContent = error.message;
+      }}
+    }}
+
+    function bindPresentationSelect(side) {{
+      const normalized = side.toLowerCase();
+      const input = normalized === 'w' ? wInput : xInput;
+      const select = normalized === 'w' ? wPresentationSelect : xPresentationSelect;
+      if (!input || !select) return;
+      select.addEventListener('change', () => {{
+        if (!select.value) return;
+        input.value = select.value;
+        if (normalized === 'w') refreshSurvivorMenu();
+      }});
+    }}
 
     function bindSurvivorSelect() {{
       const survivorSelect = document.getElementById('survivor-x-select');
@@ -3302,11 +3555,21 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
     }}
 
     bindSurvivorSelect();
+    bindPresentationSelect('W');
+    bindPresentationSelect('X');
+    refreshPresentationMenu('W');
+    refreshPresentationMenu('X');
     if (wInput) {{
-      const delayedRefresh = debounce(refreshSurvivorMenu, 350);
+      const delayedRefresh = debounce(() => {{ refreshSurvivorMenu(); refreshPresentationMenu('W'); }}, 350);
       wInput.addEventListener('input', delayedRefresh);
-      wInput.addEventListener('change', refreshSurvivorMenu);
-      wInput.addEventListener('blur', refreshSurvivorMenu);
+      wInput.addEventListener('change', () => {{ refreshSurvivorMenu(); refreshPresentationMenu('W'); }});
+      wInput.addEventListener('blur', () => {{ refreshSurvivorMenu(); refreshPresentationMenu('W'); }});
+    }}
+    if (xInput) {{
+      const delayedXRefresh = debounce(() => refreshPresentationMenu('X'), 350);
+      xInput.addEventListener('input', delayedXRefresh);
+      xInput.addEventListener('change', () => refreshPresentationMenu('X'));
+      xInput.addEventListener('blur', () => refreshPresentationMenu('X'));
     }}
 
     document.addEventListener('click', async (event) => {{
@@ -3357,6 +3620,16 @@ class AppHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def send_json(self, payload: Dict[str, Any], status: int = 200) -> None:
+        data = json.dumps(payload, sort_keys=True).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(data)
+
     def serve_rep_image(self, parsed_path: str) -> bool:
         prefix = "/" + REP_IMAGE_FOLDER_NAME + "/"
         if not parsed_path.startswith(prefix):
@@ -3374,16 +3647,59 @@ class AppHandler(BaseHTTPRequestHandler):
         self.send_file(image_path)
         return True
 
+    def serve_graph_data(self, parsed_path: str) -> bool:
+        """Serve base or generated graph JSONs used by the image explorer."""
+        matched_prefix = next(
+            (f"/{name}/" for name in ALL_FOLDER_ALIASES if parsed_path.startswith(f"/{name}/")),
+            None,
+        )
+        if matched_prefix is None:
+            return False
+        relative_text = urllib.parse.unquote(parsed_path[len(matched_prefix) :])
+        relative_path = Path(relative_text)
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            return False
+        graph_path = (ALL_DIR / relative_path).resolve()
+        try:
+            graph_path.relative_to(ALL_DIR.resolve())
+        except ValueError:
+            return False
+        if not graph_path.is_file() or graph_path.suffix.lower() != ".json":
+            return False
+        self.send_file(graph_path)
+        return True
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
         params = {k: v[-1] for k, v in urllib.parse.parse_qs(parsed.query).items()}
         if self.serve_rep_image(parsed.path):
             return
+        if self.serve_graph_data(parsed.path):
+            return
+        if parsed.path == "/health":
+            self.send_json({"app": "wrench_pairing_explorer", "status": "ready"})
+            return
+        if parsed.path == "/presentations":
+            side = params.get("side", "W").upper()
+            if side not in {"W", "X"}:
+                self.send_json({"error": "side must be W or X"}, status=400)
+                return
+            payload = benzene_presentation_options(params.get("value", ""), side)
+            self.send_json(payload, status=400 if payload.get("error") else 200)
+            return
         if parsed.path == "/":
             self.send_html(page_shell(params))
             return
-        if parsed.path in {"/image-explorer", "/images", "/web-explorer"}:
+        if parsed.path == IMAGE_EXPLORER_ROUTE:
             self.send_html(image_explorer_page())
+            return
+        if parsed.path in {"/image-explorer", "/images", "/web-explorer"}:
+            if SURVIVOR_EXPLORER_URL:
+                self.send_response(302)
+                self.send_header("Location", SURVIVOR_EXPLORER_URL)
+                self.end_headers()
+            else:
+                self.send_html(image_explorer_page())
             return
         if parsed.path == "/run":
             try:
@@ -3425,6 +3741,11 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument(
+        "--survivor-explorer-url",
+        default=None,
+        help="Current survivor explorer URL; overrides PROBLEM3_SURVIVOR_EXPLORER_URL.",
+    )
+    parser.add_argument(
         "--project-root",
         type=Path,
         default=PROJECT_ROOT,
@@ -3435,6 +3756,9 @@ def main() -> None:
         ),
     )
     args = parser.parse_args()
+    global SURVIVOR_EXPLORER_URL
+    if args.survivor_explorer_url is not None:
+        SURVIVOR_EXPLORER_URL = args.survivor_explorer_url.strip()
     configure_project_root(args.project_root)
     warm_lookup_caches()
     server = ThreadingHTTPServer((args.host, args.port), AppHandler)
