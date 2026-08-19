@@ -199,6 +199,47 @@ def canonical_tagged_rotation_system(data: Dict[str, Any]) -> Dict[str, List[Dic
     largest boundary labels.  The base face is the face between ``b_n`` and
     ``b_1`` (GPPSS Definition 4.18).
     """
+    # Newer generated presentations carry the reconstructed, tag-started
+    # rotation explicitly.  Do not reconstruct it after changing ordinary
+    # edges into hourglasses (or conversely): inserting/removing a strand slot
+    # can otherwise move the distinguished start gap and introduce a sign.
+    explicit = data.get("tagged_rotation_system")
+    if explicit:
+        effective = data.get("effective_rotation_system", {})
+        if set(map(str, explicit)) != set(map(str, effective)):
+            raise ValueError("Tagged and effective rotation systems have different vertices.")
+        result: Dict[str, List[Dict[str, Any]]] = {}
+        for node_id, source_entries in explicit.items():
+            entries = copy.deepcopy(
+                sorted(source_entries, key=lambda item: int(item["ccw_slot"]))
+            )
+            source_tokens = sorted(
+                (
+                    int(item["neighbor"]),
+                    int(item["edge"]),
+                    str(item.get("kind", "")),
+                    item.get("strand"),
+                )
+                for item in entries
+            )
+            effective_tokens = sorted(
+                (
+                    int(item["neighbor"]),
+                    int(item["edge"]),
+                    str(item.get("kind", "")),
+                    item.get("strand"),
+                )
+                for item in effective[str(node_id)]
+            )
+            if source_tokens != effective_tokens:
+                raise ValueError(
+                    f"Tagged and effective rotations disagree at vertex {node_id}."
+                )
+            for slot, item in enumerate(entries):
+                item["ccw_slot"] = slot
+            result[str(node_id)] = entries
+        return result
+
     nodes = _as_int_key_map(data.get("nodes", []))
     edges = {int(edge["id"]): edge for edge in data.get("edges", [])}
     source = {
@@ -1690,6 +1731,60 @@ def _all_antisym_pairings_are_bipartite(
     return True
 
 
+def tagged_vertex_rotation_transport_sign(
+    slot_shift: int,
+    *,
+    color: str,
+    valence: int = 4,
+) -> int:
+    """Sign from moving the tag across ``slot_shift`` incident half-edges.
+
+    Black and white vertices carry dual alternating tensors.  Both tensors
+    are antisymmetric, so moving the distinguished start by one place applies
+    a cyclic permutation of ``valence`` inputs and contributes
+    ``(-1) ** (valence - 1)``.  Keeping ``color`` explicit is intentional: a
+    rewrite must account for the white and black endpoint independently rather
+    than treating their two cyclic orders as one uncoloured list.
+    """
+    normalized_color = str(color).lower()
+    if normalized_color not in {"white", "black"}:
+        raise ValueError(f"Unsupported internal vertex color: {color!r}.")
+    if valence < 2:
+        raise ValueError("valence must be at least 2")
+    exponent = (int(slot_shift) % int(valence)) * (int(valence) - 1)
+    return -1 if exponent % 2 else 1
+
+
+def antisymmetrizer_tag_transport_factors(
+    white_central_slot: int,
+    black_central_slot: int,
+) -> Dict[str, int]:
+    """Return the separate color-sensitive signs for Double Trident.
+
+    After both endpoint tags are moved to the central edge, the three ports at
+    the black endpoint are read in the opposite boundary orientation.  The
+    latter reversal is odd.  Recording all three factors makes a one-vertex
+    cyclic-order error visible immediately in branch audits.
+    """
+    white = tagged_vertex_rotation_transport_sign(
+        white_central_slot,
+        color="white",
+        valence=4,
+    )
+    black = tagged_vertex_rotation_transport_sign(
+        black_central_slot,
+        color="black",
+        valence=4,
+    )
+    black_boundary_orientation = -1
+    return {
+        "white": white,
+        "black": black,
+        "black_boundary_orientation": black_boundary_orientation,
+        "total": white * black * black_boundary_orientation,
+    }
+
+
 def detect_antisymmetrizer_moves(
     adj: Adjacency,
     node_colors: Optional[NodeColors],
@@ -1738,9 +1833,11 @@ def detect_antisymmetrizer_moves(
             # tagged 4-valent tensors to that convention contributes one sign
             # for every crossed tag slot, plus one sign for reversing the
             # three-port order at the second endpoint.
-            tag_transport_multiplier = (
-                -1 if (white_black_slot + black_white_slot + 1) % 2 else 1
+            tag_factors = antisymmetrizer_tag_transport_factors(
+                white_black_slot,
+                black_white_slot,
             )
+            tag_transport_multiplier = int(tag_factors["total"])
             matches.append(
                 {
                     "rule": "WB_4VALENT_ANTISYMMETRIZER",
@@ -2657,6 +2754,42 @@ def pair_term_key(term: Dict[str, Any]) -> Tuple[Any, ...]:
     )
 
 
+def _coefficient_provenance(term: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Return the algebraic route contributions carried by one pair term."""
+    existing = term.get("coefficient_provenance")
+    if isinstance(existing, list):
+        return copy.deepcopy(existing)
+    return [
+        {
+            "coefficient": int(term.get("coeff", 0)),
+            "history": copy.deepcopy(term.get("history", [])),
+        }
+    ]
+
+
+def _child_coefficient_provenance(
+    term: Dict[str, Any],
+    multiplier: int,
+    move: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Transport each consolidated source through one additional relation."""
+    return [
+        {
+            "coefficient": int(route.get("coefficient", 0)) * int(multiplier),
+            "history": copy.deepcopy(route.get("history", [])) + [copy.deepcopy(move)],
+        }
+        for route in _coefficient_provenance(term)
+    ]
+
+
+def coefficient_provenance_total(term: Dict[str, Any]) -> int:
+    return sum(int(route.get("coefficient", 0)) for route in _coefficient_provenance(term))
+
+
+def coefficient_provenance_is_consistent(term: Dict[str, Any]) -> bool:
+    return coefficient_provenance_total(term) == int(term.get("coeff", 0))
+
+
 def consolidate_pair_terms(terms: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     consolidated: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
     for term in terms:
@@ -2669,8 +2802,12 @@ def consolidate_pair_terms(terms: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "w_remaining": term["w_remaining"],
                 "coeff": 0,
                 "history": term.get("history", []),
+                "coefficient_provenance": [],
             }
         consolidated[key]["coeff"] += term["coeff"]
+        consolidated[key]["coefficient_provenance"].extend(
+            _coefficient_provenance(term)
+        )
     return [term for term in consolidated.values() if term["coeff"] != 0]
 
 
@@ -2937,6 +3074,9 @@ def expand_pair_term(
                 "w_remaining": child_w_remaining,
                 "coeff": term["coeff"] * int(embedding["coefficient_multiplier"]),
                 "history": term.get("history", []) + [move],
+                "coefficient_provenance": _child_coefficient_provenance(
+                    term, int(embedding["coefficient_multiplier"]), move
+                ),
             }
         )
     return children
@@ -2991,6 +3131,9 @@ def expand_pair_term_by_figure43(
                 "w_remaining": child_w_remaining,
                 "coeff": term["coeff"] * effective_multiplier,
                 "history": term.get("history", []) + [move],
+                "coefficient_provenance": _child_coefficient_provenance(
+                    term, effective_multiplier, move
+                ),
             }
         )
     return children
@@ -3047,6 +3190,7 @@ def expand_pair_term_by_square_move(
             "w_remaining": child_w_remaining,
             "coeff": int(term["coeff"]),
             "history": term.get("history", []) + [move],
+            "coefficient_provenance": _child_coefficient_provenance(term, 1, move),
         }
     ]
 
@@ -3100,6 +3244,9 @@ def expand_pair_term_by_double_edge_skein(
             "w_remaining": child_w_remaining,
             "coeff": term["coeff"] * multiplier,
             "history": term.get("history", []) + [move],
+            "coefficient_provenance": _child_coefficient_provenance(
+                term, multiplier, move
+            ),
         }
     ]
 
@@ -3165,6 +3312,9 @@ def expand_pair_term_by_antisymmetrizer(
                 "w_remaining": term["w_remaining"],
                 "coeff": term["coeff"] * multiplier,
                 "history": term.get("history", []) + [move],
+                "coefficient_provenance": _child_coefficient_provenance(
+                    term, multiplier, move
+                ),
             }
         )
     return children
@@ -3464,6 +3614,7 @@ def evaluate_pair_state_by_coloring(
             }
         evaluation["coeff"] = term["coeff"]
         evaluation["history"] = term.get("history", [])
+        evaluation["coefficient_provenance"] = _coefficient_provenance(term)
         evaluation["common_forks"] = []
         evaluation["source_adj"] = term["x_adj"]
         evaluation["source_hourglasses"] = term["x_remaining"]
@@ -3545,14 +3696,16 @@ def evaluate_pair_by_x_component_coloring(
             "status": "not_computed",
             "reason": "X components do not carry four tagged Plucker-claw orientations",
         }
-    count = count_consistent_colorings(
+    coloring = consistent_coloring_data(
         w_adj,
         w_boundary_labels,
         condition,
         hourglasses=w_hourglasses,
         r=r,
     )
+    count = int(coloring["count"])
     return {
+        **coloring,
         "status": "computed",
         "source_side": "X_components",
         "boundary_color_by_label": condition,
@@ -3622,6 +3775,7 @@ def evaluate_pair_state_by_x_component_coloring(
         )
         evaluation["coeff"] = term["coeff"]
         evaluation["history"] = term.get("history", [])
+        evaluation["coefficient_provenance"] = _coefficient_provenance(term)
         evaluation["common_forks"] = []
         evaluation["source_adj"] = term["x_adj"]
         evaluation["source_hourglasses"] = term["x_remaining"]
@@ -3898,9 +4052,7 @@ def evaluate_active_terms_by_expanding_w_then_coloring(
                             "term_value": coeff * signed_count,
                             "source_side": "X_components",
                             "boundary_color_by_label": condition,
-                            "sample_edge_colors": coloring.get("sample_edge_colors", []),
-                            "sample_hourglass_colors": coloring.get("sample_hourglass_colors", []),
-                            "hourglass_swap_quotient": coloring.get("hourglass_swap_quotient", True),
+                            **coloring,
                             "colored_side": "W",
                             "colored_adj": current_w,
                             "colored_hourglasses": current_wh,
@@ -3972,9 +4124,7 @@ def evaluate_active_terms_by_expanding_w_then_coloring(
                             "term_value": coeff * signed_count,
                             "source_side": "X_components",
                             "boundary_color_by_label": condition,
-                            "sample_edge_colors": coloring.get("sample_edge_colors", []),
-                            "sample_hourglass_colors": coloring.get("sample_hourglass_colors", []),
-                            "hourglass_swap_quotient": coloring.get("hourglass_swap_quotient", True),
+                            **coloring,
                             "colored_side": "W",
                             "colored_adj": current_w,
                             "colored_hourglasses": current_wh,
@@ -4054,9 +4204,7 @@ def evaluate_active_terms_by_expanding_w_then_coloring(
                     "term_value": coeff * signed_count,
                     "source_side": "X_components",
                     "boundary_color_by_label": condition,
-                    "sample_edge_colors": coloring.get("sample_edge_colors", []),
-                    "sample_hourglass_colors": coloring.get("sample_hourglass_colors", []),
-                    "hourglass_swap_quotient": coloring.get("hourglass_swap_quotient", True),
+                    **coloring,
                     "colored_side": "W",
                     "colored_adj": current_w,
                     "colored_hourglasses": [],
@@ -5268,8 +5416,9 @@ def consistent_coloring_data(
     hourglasses: Optional[List[Hourglass]] = None,
     r: int = 4,
     limit: Optional[int] = None,
+    sample_limit: int = 6,
 ) -> Dict[str, Any]:
-    """Count colorings and keep one sample coloring for display.
+    """Count colorings and retain witnesses suitable for a visual audit.
 
     Ordinary edges have multiplicity one.  Each unresolved hourglass contributes
     two distinct strands between its endpoints, but the two hourglass strands
@@ -5280,6 +5429,7 @@ def consistent_coloring_data(
     three distinct colors.
     """
     hourglasses = hourglasses or []
+    sample_limit = max(1, int(sample_limit))
     covered_hourglass_nodes = {
         int(endpoint)
         for hg in hourglasses
@@ -5327,18 +5477,44 @@ def consistent_coloring_data(
         if u in boundary_labels or v in boundary_labels:
             bnode = u if u in boundary_labels else v
             label = boundary_labels[bnode]
-            if label not in boundary_color_by_label:
-                return {"count": 0, "sample_edge_colors": [], "sample_hourglass_colors": []}
-            fixed[idx] = int(boundary_color_by_label[label])
+            if label in boundary_color_by_label:
+                fixed[idx] = int(boundary_color_by_label[label])
 
     colors = [0] * len(edges)
     for idx, color in fixed.items():
         colors[idx] = color
 
     internal_vertices = [n for n in adj if n not in boundary_labels]
+    structural_conflicts: List[Dict[str, Any]] = []
     for vertex in internal_vertices:
         if len(incident_edges[vertex]) != r:
-            return {"count": 0, "sample_edge_colors": [], "sample_hourglass_colors": []}
+            structural_conflicts.append(
+                {
+                    "kind": "wrong_degree",
+                    "vertex": int(vertex),
+                    "degree": len(incident_edges[vertex]),
+                    "expected_degree": int(r),
+                    "message": (
+                        f"Internal vertex {vertex} has degree {len(incident_edges[vertex])}; "
+                        f"the coloring rule requires degree {r}."
+                    ),
+                }
+            )
+    for idx, (u, v) in enumerate(edges):
+        if idx in fixed:
+            continue
+        boundary_nodes = [node for node in (u, v) if node in boundary_labels]
+        if boundary_nodes:
+            bnode = boundary_nodes[0]
+            label = int(boundary_labels[bnode])
+            structural_conflicts.append(
+                {
+                    "kind": "missing_boundary_color",
+                    "edge": [int(u), int(v)],
+                    "boundary_label": label,
+                    "message": f"Boundary label {label} has no prescribed color.",
+                }
+            )
 
     remaining_edges = [idx for idx in range(len(edges)) if idx not in fixed]
     # Branch on the most constrained edges first: internal-internal edges usually
@@ -5369,22 +5545,149 @@ def consistent_coloring_data(
                 return False
         return True
 
+    def serialize_assignment(assignment: List[int]) -> Dict[str, Any]:
+        sample_edge_colors: List[Dict[str, Any]] = []
+        sample_hourglass_colors: List[Dict[str, Any]] = []
+        hourglass_indices = {idx for pair in hourglass_edge_pairs for idx in pair}
+        for idx, (u, v) in enumerate(edges):
+            if idx in hourglass_indices:
+                continue
+            sample_edge_colors.append(
+                {
+                    "edge": [int(u), int(v)],
+                    "kind": str(edge_meta[idx].get("kind", "ordinary")),
+                    "color": int(assignment[idx]),
+                }
+            )
+        for first, second in hourglass_edge_pairs:
+            u, v = edges[first]
+            sample_hourglass_colors.append(
+                {
+                    "edge": [int(u), int(v)],
+                    "colors": [int(assignment[first]), int(assignment[second])],
+                    "unordered": True,
+                }
+            )
+        return {
+            "sample_edge_colors": sample_edge_colors,
+            "sample_hourglass_colors": sample_hourglass_colors,
+        }
+
+    def assignment_conflicts(assignment: List[int]) -> Tuple[int, List[Dict[str, Any]], Set[int], Set[Tuple[int, int]]]:
+        conflicts: List[Dict[str, Any]] = list(structural_conflicts)
+        conflict_nodes: Set[int] = set()
+        conflict_edges: Set[Tuple[int, int]] = set()
+        score = 100 * len(structural_conflicts)
+        for conflict in structural_conflicts:
+            if "vertex" in conflict:
+                conflict_nodes.add(int(conflict["vertex"]))
+            if "edge" in conflict:
+                edge = conflict["edge"]
+                conflict_edges.add(tuple(sorted((int(edge[0]), int(edge[1])))))
+        for vertex in internal_vertices:
+            values = [int(assignment[idx]) for idx in incident_edges[vertex]]
+            counts = {color: values.count(color) for color in range(1, r + 1)}
+            duplicates = sorted(color for color, count in counts.items() if count > 1)
+            missing = sorted(color for color, count in counts.items() if count == 0)
+            if duplicates or missing:
+                penalty = sum(max(0, count - 1) for count in counts.values()) + len(missing)
+                score += penalty
+                conflict_nodes.add(int(vertex))
+                duplicate_indices = [
+                    idx
+                    for idx in incident_edges[vertex]
+                    if int(assignment[idx]) in duplicates
+                ]
+                for idx in duplicate_indices:
+                    conflict_edges.add(tuple(sorted(edges[idx])))
+                conflicts.append(
+                    {
+                        "kind": "vertex_color_conflict",
+                        "vertex": int(vertex),
+                        "colors": values,
+                        "duplicate_colors": duplicates,
+                        "missing_colors": missing,
+                        "message": (
+                            f"Vertex {vertex} repeats color(s) {duplicates} and is missing "
+                            f"color(s) {missing}."
+                        ),
+                    }
+                )
+        for first, second in hourglass_edge_pairs:
+            if assignment[first] == assignment[second]:
+                score += 2
+                edge = tuple(sorted(edges[first]))
+                conflict_edges.add(edge)
+                conflicts.append(
+                    {
+                        "kind": "hourglass_color_conflict",
+                        "edge": [int(edge[0]), int(edge[1])],
+                        "color": int(assignment[first]),
+                        "message": (
+                            f"The two strands of hourglass {edge} both have color "
+                            f"{assignment[first]}."
+                        ),
+                    }
+                )
+        return score, conflicts, conflict_nodes, conflict_edges
+
+    def best_effort_assignment() -> Tuple[List[int], List[Dict[str, Any]], Set[int], Set[Tuple[int, int]], int]:
+        free = [idx for idx in range(len(edges)) if idx not in fixed]
+        best_assignment: Optional[List[int]] = None
+        best_payload: Optional[Tuple[int, List[Dict[str, Any]], Set[int], Set[Tuple[int, int]]]] = None
+        # Several deterministic starts avoid making the diagnostic depend on a
+        # single arbitrary initial color, while keeping this path inexpensive.
+        for offset in range(max(1, r)):
+            trial = [0] * len(edges)
+            for idx, color in fixed.items():
+                trial[idx] = int(color)
+            for order, idx in enumerate(free):
+                trial[idx] = ((order + offset) % r) + 1
+            for _ in range(3):
+                changed = False
+                for idx in free:
+                    old = trial[idx]
+                    candidates = []
+                    for color in range(1, r + 1):
+                        trial[idx] = color
+                        candidates.append((assignment_conflicts(trial)[0], color))
+                    _, chosen = min(candidates)
+                    trial[idx] = chosen
+                    changed = changed or chosen != old
+                if not changed:
+                    break
+            payload = assignment_conflicts(trial)
+            if best_payload is None or payload[0] < best_payload[0] or (
+                payload[0] == best_payload[0] and tuple(trial) < tuple(best_assignment or [])
+            ):
+                best_assignment = list(trial)
+                best_payload = payload
+        assert best_assignment is not None and best_payload is not None
+        score, conflicts, nodes, conflict_edges = best_payload
+        return best_assignment, conflicts, nodes, conflict_edges, score
+
     for vertex in internal_vertices:
         if not vertex_possible(vertex):
-            return {"count": 0, "sample_edge_colors": [], "sample_hourglass_colors": []}
+            structural_conflicts.append(
+                {
+                    "kind": "fixed_boundary_conflict",
+                    "vertex": int(vertex),
+                    "message": f"Fixed boundary colors already conflict at vertex {vertex}.",
+                }
+            )
 
     total = 0
-    sample: Optional[List[int]] = None
+    samples: List[List[int]] = []
 
     def backtrack(pos: int) -> None:
-        nonlocal total, sample
+        nonlocal total
         if limit is not None and total >= limit:
             return
         if pos == len(remaining_edges):
             if hourglass_order_possible() and all(vertex_complete(vertex) for vertex in internal_vertices):
                 total += 1
-                if sample is None:
-                    sample = list(colors)
+                if len(samples) < sample_limit:
+                    samples.append(list(colors))
             return
 
         edge_idx = remaining_edges[pos]
@@ -5395,36 +5698,44 @@ def consistent_coloring_data(
                 backtrack(pos + 1)
             colors[edge_idx] = 0
 
-    backtrack(0)
-    sample_edge_colors: List[Dict[str, Any]] = []
-    sample_hourglass_colors: List[Dict[str, Any]] = []
-    if sample is not None:
-        hourglass_indices = {idx for pair in hourglass_edge_pairs for idx in pair}
-        for idx, (u, v) in enumerate(edges):
-            if idx in hourglass_indices:
-                continue
-            sample_edge_colors.append(
-                {
-                    "edge": [int(u), int(v)],
-                    "kind": str(edge_meta[idx].get("kind", "ordinary")),
-                    "color": int(sample[idx]),
-                }
-            )
-        for first, second in hourglass_edge_pairs:
-            u, v = edges[first]
-            sample_hourglass_colors.append(
-                {
-                    "edge": [int(u), int(v)],
-                    "colors": [int(sample[first]), int(sample[second])],
-                    "unordered": True,
-                }
-            )
+    if not structural_conflicts:
+        backtrack(0)
+    serialized_samples = [serialize_assignment(sample) for sample in samples]
+    first_sample = serialized_samples[0] if serialized_samples else {
+        "sample_edge_colors": [],
+        "sample_hourglass_colors": [],
+    }
+    diagnostic: Dict[str, Any] = {
+        "best_effort_edge_colors": [],
+        "best_effort_hourglass_colors": [],
+        "coloring_conflicts": [],
+        "conflict_nodes": [],
+        "conflict_edges": [],
+        "best_effort_conflict_score": 0,
+        "best_effort_is_valid": total > 0,
+    }
+    if total == 0:
+        attempted, conflicts, conflict_nodes, conflict_edges, score = best_effort_assignment()
+        attempted_serialized = serialize_assignment(attempted)
+        diagnostic = {
+            "best_effort_edge_colors": attempted_serialized["sample_edge_colors"],
+            "best_effort_hourglass_colors": attempted_serialized["sample_hourglass_colors"],
+            "coloring_conflicts": conflicts,
+            "conflict_nodes": sorted(int(node) for node in conflict_nodes),
+            "conflict_edges": [[int(u), int(v)] for u, v in sorted(conflict_edges)],
+            "best_effort_conflict_score": int(score),
+            "best_effort_is_valid": False,
+        }
     return {
         "count": total,
-        "sample_edge_colors": sample_edge_colors,
-        "sample_hourglass_colors": sample_hourglass_colors,
+        **first_sample,
+        "coloring_samples": serialized_samples,
+        "displayed_coloring_count": len(serialized_samples),
+        "coloring_samples_truncated": total > len(serialized_samples),
+        "count_is_exact": limit is None or total < limit,
         "hourglass_edge_pairs": len(hourglass_edge_pairs),
         "hourglass_swap_quotient": True,
+        **diagnostic,
     }
 
 
@@ -5457,6 +5768,7 @@ def evaluate_pair_by_coloring(
             r=r,
         )
         return {
+            **coloring,
             "status": "computed",
             "source_side": "X",
             "plucker_factors": x_components,
@@ -5465,9 +5777,6 @@ def evaluate_pair_by_coloring(
             "source_orientation_sign": 1,
             "diagnostic_tag_orientation": tag_orientation,
             "signed_coloring_count": int(coloring["count"]),
-            "sample_edge_colors": coloring.get("sample_edge_colors", []),
-            "sample_hourglass_colors": coloring.get("sample_hourglass_colors", []),
-            "hourglass_swap_quotient": coloring.get("hourglass_swap_quotient", True),
         }
 
     w_components = plucker_product_components(w_adj, w_boundary_labels, r=r)
@@ -5482,6 +5791,7 @@ def evaluate_pair_by_coloring(
             r=r,
         )
         return {
+            **coloring,
             "status": "computed",
             "source_side": "W",
             "plucker_factors": w_components,
@@ -5490,9 +5800,6 @@ def evaluate_pair_by_coloring(
             "source_orientation_sign": 1,
             "diagnostic_tag_orientation": tag_orientation,
             "signed_coloring_count": int(coloring["count"]),
-            "sample_edge_colors": coloring.get("sample_edge_colors", []),
-            "sample_hourglass_colors": coloring.get("sample_hourglass_colors", []),
-            "hourglass_swap_quotient": coloring.get("hourglass_swap_quotient", True),
         }
 
     return {

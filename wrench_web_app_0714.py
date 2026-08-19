@@ -17,6 +17,10 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import Wrench_or_Skein_0714 as wrench
+from benzene_representations import (
+    classify_benzene_representation,
+    presentation_paths_for_word,
+)
 import web_relation_rules_0714_2 as relation_rules
 
 
@@ -64,6 +68,83 @@ def param_bool(params: Dict[str, str], name: str, default: bool = True) -> bool:
     if raw is None or raw == "":
         return default
     return str(raw).lower() not in {"0", "false", "no", "off"}
+
+
+def ensure_coloring_witnesses_for_display(
+    evaluation: Dict[str, Any],
+    colored_adj: wrench.Adjacency,
+    boundary_labels: wrench.BoundaryLabels,
+    boundary_condition: Dict[int, int],
+    colored_hourglasses: List[wrench.Hourglass],
+    *,
+    r: int = 4,
+    sample_limit: int = 6,
+) -> Dict[str, Any]:
+    """Return a display payload whose positive count has a real witness.
+
+    Some compact/legacy proof records retained ``coloring_count`` but omitted
+    ``coloring_samples``. Rendering those records used to produce the
+    contradictory combination "exactly 1 coloring" and "no proper coloring".
+    Recover missing witnesses with the same exact coloring solver. If the
+    recovered count disagrees with the stored count, preserve the stored
+    mathematical result but expose an explicit warning instead of drawing a
+    misleading success or failure picture.
+    """
+    out = dict(evaluation)
+    stored_count = int(out.get("coloring_count", out.get("count", 0)) or 0)
+    samples = [item for item in out.get("coloring_samples", []) if isinstance(item, dict)]
+
+    legacy_edges = out.get("sample_edge_colors")
+    legacy_hourglasses = out.get("sample_hourglass_colors")
+    legacy_has_witness = bool(legacy_edges) or bool(legacy_hourglasses)
+    if stored_count > 0 and not samples and legacy_has_witness:
+        samples = [
+            {
+                "sample_edge_colors": legacy_edges or [],
+                "sample_hourglass_colors": legacy_hourglasses or [],
+            }
+        ]
+
+    out["display_coloring_count"] = stored_count
+    out["display_count_is_exact"] = bool(out.get("count_is_exact", True))
+    out["display_coloring_samples"] = samples
+    out["display_witness_recomputed"] = False
+    out["display_count_warning"] = ""
+    if stored_count <= 0 or samples:
+        return out
+
+    recovered = wrench.consistent_coloring_data(
+        colored_adj,
+        boundary_labels,
+        boundary_condition,
+        hourglasses=colored_hourglasses,
+        r=r,
+        sample_limit=max(1, int(sample_limit)),
+    )
+    recovered_count = int(recovered.get("count", 0) or 0)
+    recovered_samples = [
+        item for item in recovered.get("coloring_samples", []) if isinstance(item, dict)
+    ]
+    out.update(
+        {
+            key: value
+            for key, value in recovered.items()
+            if key.startswith("best_effort_")
+            or key in {"coloring_conflicts", "conflict_nodes", "conflict_edges"}
+        }
+    )
+    out["display_coloring_count"] = recovered_count
+    out["display_count_is_exact"] = bool(recovered.get("count_is_exact", True))
+    out["display_coloring_samples"] = recovered_samples
+    out["display_witness_recomputed"] = True
+    out["display_recounted_coloring_count"] = recovered_count
+    if recovered_count != stored_count:
+        out["display_count_warning"] = (
+            f"Stored branch data reports {stored_count} proper coloring"
+            f"{'s' if stored_count != 1 else ''}, but the current exact witness solver "
+            f"finds {recovered_count}. The stored contribution has not been silently changed."
+        )
+    return out
 
 
 def unique_existing_paths(paths: Iterable[Path]) -> List[Path]:
@@ -294,7 +375,7 @@ def graph_word(path: Path) -> str:
 
 
 def benzene_presentation_options(value: str, side: str) -> Dict[str, Any]:
-    """Return catalogue and benzene-moved JSON choices for one web input."""
+    """Return structurally named exact benzene-presentation choices."""
     if not value.strip():
         return {"word": "", "selected": "", "options": []}
     try:
@@ -311,38 +392,31 @@ def benzene_presentation_options(value: str, side: str) -> Dict[str, Any]:
     except ValueError:
         pass
 
-    manifest_path = ALL_DIR / "benzene_move_presentations" / "manifest.json"
-    options: List[Dict[str, Any]] = [
-        {
-            "value": word,
-            "label": f"Catalogue presentation ({word})",
-            "presentation": 0,
-            "move_count": 0,
-        }
-    ]
-    if manifest_path.is_file():
-        manifest = load_json(manifest_path)
-        entries = sorted(
-            (entry for entry in manifest.get("files", []) if entry.get("word") == word),
-            key=lambda entry: (int(entry.get("presentation", 0)), str(entry.get("json", ""))),
-        )
-        for entry in entries:
-            presentation = int(entry.get("presentation", 0))
-            move_count = int(entry.get("move_count", 0))
-            if move_count == 1:
-                label = "Single benzene move (rest unchanged)"
-            elif move_count > 1:
-                label = f"Benzene chain reaction ({move_count} moves)"
-            else:
-                label = f"Benzene presentation {presentation}"
-            options.append(
-                {
-                    "value": str(entry["json"]),
-                    "label": label,
-                    "presentation": presentation,
-                    "move_count": move_count,
-                }
+    records = presentation_paths_for_word(ALL_DIR, word)
+    options: List[Dict[str, Any]] = []
+    for record in records:
+        representation = str(record["representation"])
+        origin = str(record["origin"])
+        if representation == "none":
+            label = "Benzene-free — catalogue presentation"
+        else:
+            origin_label = (
+                "catalogue (growth algorithm)"
+                if origin == "catalogue"
+                else f"generated presentation {int(record['presentation'])}"
             )
+            label = f"{representation.title()} — {origin_label}"
+        options.append(
+            {
+                "value": str(record["value"]),
+                "label": label,
+                "representation": representation,
+                "benzene_count": int(record["benzene_count"]),
+                "origin": origin,
+                "presentation": int(record["presentation"]),
+                "move_count": int(record["move_count"]),
+            }
+        )
     return {"word": word, "selected": selected or word, "options": options}
 
 
@@ -1744,6 +1818,23 @@ def coefficient_explanation(record: Dict[str, Any]) -> str:
         coeff = int(record.get("coeff", path_sign))
     except (TypeError, ValueError):
         return ""
+    raw = record.get("raw", record)
+    provenance = [
+        route
+        for route in raw.get("coefficient_provenance", [])
+        if isinstance(route, dict)
+    ]
+    provenance_total = sum(int(route.get("coefficient", 0)) for route in provenance)
+    if len(provenance) > 1 and provenance_total == coeff:
+        formula = " + ".join(
+            f"({int(route.get('coefficient', 0)):+d})" for route in provenance
+        )
+        return (
+            f'<p class="muted"><strong>Coefficient check:</strong> this terminal ribbon state '
+            f'is reached by {len(provenance)} algebraic source terms. Their signed sum is '
+            f'<span class="word">{html.escape(formula)} = {coeff:+d}</span>. '
+            f'The move sequence below is one representative route, not the entire sum.</p>'
+        )
     if path_sign == 0:
         return ""
     if coeff == path_sign:
@@ -1765,6 +1856,51 @@ def coefficient_explanation(record: Dict[str, Any]) -> str:
         f'<span class="word">{path_sign:+d}</span>, while the consolidated branch coefficient is '
         f'<span class="word">{coeff:+d}</span>.</p>'
     )
+
+
+def coefficient_provenance_table(record: Dict[str, Any]) -> str:
+    raw = record.get("raw", record)
+    provenance = [
+        route
+        for route in raw.get("coefficient_provenance", [])
+        if isinstance(route, dict)
+    ]
+    if len(provenance) <= 1:
+        return ""
+    rows = []
+    for index, route in enumerate(provenance, start=1):
+        history = [move for move in route.get("history", []) if isinstance(move, dict)]
+        pieces = []
+        for move in history:
+            phase = str(move.get("phase", "main_search"))
+            smoothing = str(move.get("smoothing", move.get("kind", "")))
+            multiplier = int(
+                move.get("coefficient_multiplier", wrench.move_multiplier(smoothing))
+            )
+            pieces.append(f"{phase}:{smoothing}({multiplier:+d})")
+        route_coeff = int(route.get("coefficient", 0))
+        rows.append(
+            "<tr>"
+            f"<td>{index}</td>"
+            f"<td>{route_coeff:+d}</td>"
+            f"<td>{history_sign(history):+d}</td>"
+            f"<td>{html.escape(' → '.join(pieces))}</td>"
+            "</tr>"
+        )
+    total = sum(int(route.get("coefficient", 0)) for route in provenance)
+    return f"""
+    <section class="step coefficient-provenance">
+      <div class="step-head">
+        <div><strong>Consolidated Coefficient Provenance</strong></div>
+        <div class="muted">Every algebraic route merged into this exact ribbon-sensitive terminal state.</div>
+      </div>
+      <table class="step-table">
+        <thead><tr><th>source</th><th>contribution</th><th>path product</th><th>complete move signature</th></tr></thead>
+        <tbody>{''.join(rows)}</tbody>
+        <tfoot><tr><th colspan="3">signed sum</th><th>{total:+d}</th></tr></tfoot>
+      </table>
+    </section>
+    """
 
 
 def branch_terminal_picture(
@@ -2399,6 +2535,8 @@ def compute_pair_context(params: Dict[str, str]) -> Dict[str, Any]:
         "proof": proof,
         "x_graph": x_graph,
         "w_graph": w_graph,
+        "x_representation": classify_benzene_representation(x_graph).name,
+        "w_representation": classify_benzene_representation(w_graph).name,
     }
 
 
@@ -2540,6 +2678,7 @@ def render_branch_page(params: Dict[str, str]) -> str:
             {coefficient_explanation(record)}
           </div>
         </section>
+        {coefficient_provenance_table(record)}
         <section class="step">
           <div class="step-head">
             <div><strong>Move Sequence</strong></div>
@@ -2674,6 +2813,8 @@ def run_pair(params: Dict[str, str]) -> str:
     x_hgs = context["x_hgs"]
     w_hgs = context["w_hgs"]
     proof = context["proof"]
+    x_representation = context["x_representation"]
+    w_representation = context["w_representation"]
     show_steps = params.get("show_steps") == "1"
     x_graph, w_graph, x_bounds, w_bounds, steps, final_x, final_w, final_xh, final_wh, displayed_history = reconstruct_run(
         x_path, w_path, proof
@@ -2924,8 +3065,8 @@ def run_pair(params: Dict[str, str]) -> str:
           <div>
             <h2>Pairing Result</h2>
             <p><strong>Mode:</strong> {html.escape(pair_mode)}</p>
-            <p><strong>W:</strong> <span class="muted">{w_index:04d}</span> <span class="word">{html.escape(w_word)}</span></p>
-            <p><strong>X:</strong> <span class="muted">{x_index:04d}</span> <span class="word">{html.escape(x_word)}</span></p>
+            <p><strong>W:</strong> <span class="muted">{w_index:04d}</span> <span class="word">{html.escape(w_word)}</span> — {html.escape(w_representation)}</p>
+            <p><strong>X:</strong> <span class="muted">{x_index:04d}</span> <span class="word">{html.escape(x_word)}</span> — {html.escape(x_representation)}</p>
             {fallback_note}
           </div>
           <div class="result-pill">{html.escape(proof['status'])}</div>
@@ -3159,21 +3300,39 @@ def render_coloring_section(
         x_curves = wrench.edge_curves_from_history(history, "X", x_adj)
         w_curves = wrench.edge_curves_from_history(history, "W", w_adj)
 
-        count = int(ev.get("coloring_count", ev.get("count", 0)) or 0)
-        count_is_exact = bool(ev.get("count_is_exact", True))
-        samples = [item for item in ev.get("coloring_samples", []) if isinstance(item, dict)]
-        if count > 0 and not samples and ev.get("sample_edge_colors") is not None:
-            samples = [
-                {
-                    "sample_edge_colors": ev.get("sample_edge_colors", []),
-                    "sample_hourglass_colors": ev.get("sample_hourglass_colors", []),
-                }
-            ]
+        ev = ensure_coloring_witnesses_for_display(
+            ev,
+            w_adj,
+            w_bounds,
+            condition,
+            w_hgs,
+        )
+        count = int(ev.get("display_coloring_count", 0) or 0)
+        count_is_exact = bool(ev.get("display_count_is_exact", True))
+        samples = [
+            item
+            for item in ev.get("display_coloring_samples", [])
+            if isinstance(item, dict)
+        ]
 
         if count_is_exact:
             count_sentence = f"W has exactly {count} proper coloring{'s' if count != 1 else ''}."
         else:
             count_sentence = f"At least {count} proper W colorings were found before the search limit."
+
+        witness_note = ""
+        if ev.get("display_witness_recomputed"):
+            witness_note = (
+                '<p class="muted">The stored branch summary omitted its coloring witness; '
+                'the current exact coloring solver reconstructed the display witness.</p>'
+            )
+        count_warning = str(ev.get("display_count_warning", ""))
+        warning_panel = (
+            f'<div class="conflict-list"><strong>Stored/display count mismatch</strong>'
+            f'<div class="conflict-item">{html.escape(count_warning)}</div></div>'
+            if count_warning
+            else ""
+        )
 
         x_picture = draw_web_svg(
             "X: boundary component colors",
@@ -3279,8 +3438,10 @@ def render_coloring_section(
               <p><strong>Coloring count:</strong> {html.escape(str(ev.get('coloring_count')))}</p>
               <p><strong>Contribution:</strong> {html.escape(str(ev.get('term_value')))}</p>
               <p class="coloring-audit"><strong>{html.escape(count_sentence)}</strong></p>
+              {witness_note}
               <p class="muted">Hourglass strands use unordered distinct color pairs; swapping the two hourglass strand colors is not counted again.</p>
               {coloring_pictures}
+              {warning_panel}
               {conflict_panel}
             </div>
             """
