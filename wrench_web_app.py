@@ -26,7 +26,9 @@ ALL_FOLDER_NAME = "hourglass_disk_4x4_all_graph_data"
 ALL_FOLDER_ALIASES = (ALL_FOLDER_NAME, "4x4_All_graph_data")
 SURVIVOR_CSV_NAME = "lemma46_survivors.csv"
 PROMOTION_TABLE_PATH = Path("hourglass_disk_4x4_promotion_reps") / "promotion_orbits_4x4.tsv"
-IMAGE_EXPLORER_HTML_NAME = "web_explorer_v3.html"
+IMAGE_EXPLORER_HTML_NAME = "web_explorer_v4.html"
+IMAGE_EXPLORER_ROUTE = f"/{IMAGE_EXPLORER_HTML_NAME}"
+SURVIVOR_EXPLORER_URL = os.environ.get("PROBLEM3_SURVIVOR_EXPLORER_URL", "").strip()
 REP_IMAGE_FOLDER_NAME = "hourglass_disk_4x4_promotion_reps"
 PROJECT_ROOT = Path(os.environ.get("PROBLEM3_ROOT", APP_DIR)).expanduser().resolve()
 X_DIR = PROJECT_ROOT / X_FOLDER_NAME
@@ -1038,17 +1040,48 @@ def reconstruct_run(x_path: Path, w_path: Path, proof: Dict[str, Any]):
     def opposite_smoothing(smoothing: str) -> str:
         return "parallel" if smoothing == "crossing" else "crossing"
 
-    def sibling_discharge(prefix: List[Dict[str, Any]], continue_move: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def sibling_outcome(prefix: List[Dict[str, Any]], continue_move: Dict[str, Any]) -> Dict[str, Any]:
+        sibling_prefix = list(prefix) + [
+            {
+                **continue_move,
+                "smoothing": opposite_smoothing(continue_move["smoothing"]),
+            }
+        ]
         for discharged in proof.get("discharged_terms", []):
             history = discharged.get("history", [])
-            if len(history) != len(prefix) + 1:
+            if not history_matches(history, sibling_prefix):
                 continue
-            if not history_matches(history, prefix):
+            if not discharged.get("common_forks"):
                 continue
-            move = history[-1]
-            if same_hourglass(move, continue_move) and move.get("smoothing") != continue_move.get("smoothing"):
-                return discharged
-        return None
+            return {
+                **discharged,
+                "status": "fork_killed" if len(history) == len(sibling_prefix) else "continued_then_fork_killed",
+                "continued_steps": max(0, len(history) - len(sibling_prefix)),
+            }
+        for active in proof.get("active_terms", []):
+            history = active.get("history", [])
+            if not history_matches(history, sibling_prefix):
+                continue
+            fallback = proof.get("w_expansion_fallback", {})
+            status = "continued_active"
+            if fallback.get("status") and fallback.get("status") != "not_computed":
+                status = "continued_to_fallback"
+            return {
+                "common_forks": active.get("common_forks", []),
+                "coeff": active.get("coeff", ""),
+                "history": history,
+                "reason": fallback.get("reason", ""),
+                "status": status,
+                "continued_steps": max(0, len(history) - len(sibling_prefix)),
+            }
+        return {
+            "common_forks": [],
+            "coeff": "",
+            "history": sibling_prefix,
+            "reason": "not_found_on_display_path",
+            "status": "not_found",
+            "continued_steps": 0,
+        }
 
     if proof.get("active_terms"):
         active_history = proof["active_terms"][0].get("history", [])
@@ -1068,17 +1101,8 @@ def reconstruct_run(x_path: Path, w_path: Path, proof: Dict[str, Any]):
             for h in hgs
             if tuple(sorted((int(h["white"]), int(h["black"])))) == selected
         )
-        killed = sibling_discharge(active_history[:idx], continue_move) or {
-            "common_forks": [],
-            "coeff": "",
-            "history": [],
-            "reason": "not_found_on_display_path",
-        }
-        killed_move = (
-            killed.get("history", [])[-1]
-            if killed.get("history")
-            else {"smoothing": opposite_smoothing(continue_move["smoothing"])}
-        )
+        killed = sibling_outcome(active_history[:idx], continue_move)
+        sibling_smoothing = opposite_smoothing(continue_move["smoothing"])
 
         def branch(smoothing: str):
             if side == "X":
@@ -1097,7 +1121,7 @@ def reconstruct_run(x_path: Path, w_path: Path, proof: Dict[str, Any]):
                 new_w = edge_set(bw) - edge_set(current_w)
             return bx, bw, bxh, bwh, new_x, new_w
 
-        killed_x, killed_w, killed_xh, killed_wh, killed_new_x, killed_new_w = branch(killed_move["smoothing"])
+        killed_x, killed_w, killed_xh, killed_wh, killed_new_x, killed_new_w = branch(sibling_smoothing)
         cont_x, cont_w, cont_xh, cont_wh, cont_new_x, cont_new_w = branch(continue_move["smoothing"])
         steps.append(
             {
@@ -1108,7 +1132,8 @@ def reconstruct_run(x_path: Path, w_path: Path, proof: Dict[str, Any]):
                 "current_xh": current_xh,
                 "current_wh": current_wh,
                 "killed": killed,
-                "killed_smoothing": killed_move["smoothing"],
+                "killed_smoothing": sibling_smoothing,
+                "sibling_smoothing": sibling_smoothing,
                 "continue_smoothing": continue_move["smoothing"],
                 "killed_x": killed_x,
                 "killed_w": killed_w,
@@ -1141,7 +1166,7 @@ def run_pair(params: Dict[str, str]) -> str:
     w_adj, w_bounds, w_hgs = wrench.parse_web(w_path)
     x_hgs = wrench.sort_hourglasses_by_boundary_distance(x_adj, x_bounds, x_hgs)
     w_hgs = wrench.sort_hourglasses_by_boundary_distance(w_adj, w_bounds, w_hgs)
-    proof = wrench.prove_pair_zero_allowing_w_wrench(
+    proof = wrench.prove_pair_value_complete_pipeline(
         x_adj,
         x_bounds,
         x_hgs,
@@ -1149,8 +1174,11 @@ def run_pair(params: Dict[str, str]) -> str:
         w_bounds,
         w_hgs,
         allow_w_wrench=allow_w,
-        beam_width=beam_width,
-        max_steps=max_steps,
+        guided_beam_width=beam_width,
+        x_beam_width=max(500, beam_width),
+        guided_steps=max_steps,
+        x_resolution_steps=None,
+        max_w_expansions_per_branch=16,
     )
     x_graph, w_graph, x_bounds, w_bounds, steps, final_x, final_w, final_xh, final_wh = reconstruct_run(
         x_path, w_path, proof
@@ -1164,29 +1192,63 @@ def run_pair(params: Dict[str, str]) -> str:
     if show_steps:
         for idx, step in enumerate(steps, start=1):
             killed_forks = step["killed"].get("common_forks", [])
-            fork = killed_forks[0] if killed_forks else None
+            sibling_status = step["killed"].get("status", "")
+            fork = killed_forks[0] if sibling_status == "fork_killed" and killed_forks else None
+            if sibling_status == "fork_killed":
+                killed_title = "Killed branch by fork lemma"
+                killed_note = f"fork(s): {html.escape(str(killed_forks))}, coeff {html.escape(str(step['killed'].get('coeff')))}"
+                killed_branch_text = f"{html.escape(step['killed_smoothing'])} branch is killed"
+                continue_title = "Continuing branch"
+                continue_note = "new smoothing edges are blue"
+            elif sibling_status == "continued_then_fork_killed":
+                extra = int(step["killed"].get("continued_steps", 0) or 0)
+                killed_title = "Other continuing branch"
+                killed_note = f"after {extra} further move(s): fork(s): {html.escape(str(killed_forks))}, coeff {html.escape(str(step['killed'].get('coeff')))}"
+                killed_branch_text = f"{html.escape(step['killed_smoothing'])} branch continues and is killed later"
+                continue_title = "Displayed continuing branch"
+                continue_note = "this is the branch followed in the trace"
+            elif sibling_status == "continued_to_fallback":
+                extra = int(step["killed"].get("continued_steps", 0) or 0)
+                killed_title = "Other continuing branch"
+                killed_note = f"after {extra} further move(s), this branch is evaluated by W-expansion/coloring, not by an immediate fork kill"
+                killed_branch_text = f"{html.escape(step['killed_smoothing'])} branch continues to fallback"
+                continue_title = "Displayed continuing branch"
+                continue_note = "this is the branch followed in the trace"
+            elif sibling_status == "continued_active":
+                extra = int(step["killed"].get("continued_steps", 0) or 0)
+                killed_title = "Other continuing branch"
+                killed_note = f"after {extra} further move(s), no common fork kill was certified for this branch"
+                killed_branch_text = f"{html.escape(step['killed_smoothing'])} branch remains active"
+                continue_title = "Displayed continuing branch"
+                continue_note = "this is the branch followed in the trace"
+            else:
+                killed_title = "Other branch not found in displayed path"
+                killed_note = "This is not a fork-lemma kill; the full search/correction pipeline must continue or evaluate it."
+                killed_branch_text = f"{html.escape(step['killed_smoothing'])} branch is not certified by fork lemma"
+                continue_title = "Displayed continuing branch"
+                continue_note = "this is the branch followed in the trace"
             selected = step["selected"]
             step_html.append(
                 f"""
                 <section class="step">
                   <div class="step-head">
                     <div><strong>Step {idx}</strong>: expand {step['side']} hourglass {list(selected)}</div>
-                    <div class="muted">{html.escape(step['continue_smoothing'])} branch continues; {html.escape(step['killed_smoothing'])} branch is killed</div>
+                    <div class="muted">{html.escape(step['continue_smoothing'])} branch continues; {killed_branch_text}</div>
                   </div>
                   <div class="grid four">
                     {draw_web_svg('Current W', w_graph, step['current_w'], step['current_wh'], selected_hg=selected if step['side']=='W' else None)}
                     {draw_web_svg('Current X', x_graph, step['current_x'], step['current_xh'], selected_hg=selected if step['side']=='X' else None)}
                     <div class="pair-card">
-                      <div class="pair-title">Killed branch by fork lemma</div>
-                      <div class="pair-note">fork(s): {html.escape(str(killed_forks))}, coeff {html.escape(str(step['killed'].get('coeff')))}</div>
+                      <div class="pair-title">{killed_title}</div>
+                      <div class="pair-note">{killed_note}</div>
                       <div class="mini-pair">
                         {draw_web_svg('W', w_graph, step['killed_w'], step['killed_wh'], highlight_fork=fork, edge_colors={e:'#2586d8' for e in step['killed_new_w']}, size=250)}
                         {draw_web_svg('X', x_graph, step['killed_x'], step['killed_xh'], highlight_fork=fork, edge_colors={e:'#2586d8' for e in step['killed_new_x']}, size=250)}
                       </div>
                     </div>
                     <div class="pair-card">
-                      <div class="pair-title">Continuing branch</div>
-                      <div class="pair-note">new smoothing edges are blue</div>
+                      <div class="pair-title">{continue_title}</div>
+                      <div class="pair-note">{continue_note}</div>
                       <div class="mini-pair">
                         {draw_web_svg('W', w_graph, step['continue_w'], step['continue_wh'], edge_colors={e:'#2586d8' for e in step['continue_new_w']}, size=250)}
                         {draw_web_svg('X', x_graph, step['continue_x'], step['continue_xh'], edge_colors={e:'#2586d8' for e in step['continue_new_x']}, size=250)}
@@ -1200,6 +1262,14 @@ def run_pair(params: Dict[str, str]) -> str:
         rows = []
         for idx, step in enumerate(steps, start=1):
             killed_forks = step["killed"].get("common_forks", [])
+            sibling_status = step["killed"].get("status", "not_found")
+            status_label = {
+                "fork_killed": "fork-killed immediately",
+                "continued_then_fork_killed": "continued, then fork-killed",
+                "continued_to_fallback": "continued to W-expansion/coloring",
+                "continued_active": "continued and remains active",
+                "not_found": "not found on displayed path",
+            }.get(sibling_status, str(sibling_status))
             rows.append(
                 "<tr>"
                 f"<td>{idx}</td>"
@@ -1207,7 +1277,7 @@ def run_pair(params: Dict[str, str]) -> str:
                 f"<td>{html.escape(str(list(step['selected'])))}</td>"
                 f"<td>{html.escape(step['continue_smoothing'])}</td>"
                 f"<td>{html.escape(step['killed_smoothing'])}</td>"
-                f"<td>{html.escape(str(killed_forks))}</td>"
+                f"<td>{html.escape(status_label)}: {html.escape(str(killed_forks))}</td>"
                 "</tr>"
             )
         step_html.append(
@@ -1226,6 +1296,20 @@ def run_pair(params: Dict[str, str]) -> str:
         )
 
     coloring_html = render_coloring_section(x_graph, w_graph, x_bounds, w_bounds, final_x, final_w, proof)
+    fallback = proof.get("w_expansion_fallback", {})
+    fallback_note = ""
+    if fallback:
+        reason = fallback.get("reason", "")
+        details = (
+            f"W-expanded terms: {fallback.get('w_expanded_terms', 0)}; "
+            f"W branches fork-killed: {fallback.get('w_expanded_fork_killed', 0)}; "
+            f"direct W-coloring terms: {fallback.get('w_direct_colored_terms', 0)}"
+        )
+        fallback_note = (
+            f'<p class="muted"><strong>Complete pipeline:</strong> {html.escape(str(fallback.get("status", "")))}. '
+            f'{html.escape(details)}'
+            f'{(" Reason: " + html.escape(str(reason))) if reason else ""}</p>'
+        )
     return page_shell(
         params,
         f"""
@@ -1235,6 +1319,7 @@ def run_pair(params: Dict[str, str]) -> str:
             <p><strong>Mode:</strong> {html.escape(pair_mode)}</p>
             <p><strong>W:</strong> <span class="muted">{w_index:04d}</span> <span class="word">{html.escape(w_word)}</span></p>
             <p><strong>X:</strong> <span class="muted">{x_index:04d}</span> <span class="word">{html.escape(x_word)}</span></p>
+            {fallback_note}
           </div>
           <div class="result-pill">{html.escape(proof['status'])}</div>
           <div class="metric"><span>Fork-killed branches</span><strong>{proof['discharged_term_count']}</strong></div>
@@ -1340,6 +1425,12 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
     has_visible_manual_pair = bool(params.get("w", "").strip() and params.get("x", "").strip())
     use_transpose = "checked" if params.get("use_transpose") == "1" and not has_visible_manual_pair else ""
     survivor_menu = survivor_selector_html(params)
+    survivor_href = html.escape(SURVIVOR_EXPLORER_URL or IMAGE_EXPLORER_ROUTE, quote=True)
+    survivor_label = (
+        "Open current survivor explorer (transpose lookup)"
+        if SURVIVOR_EXPLORER_URL
+        else "Open Web Explorer v4 (transpose lookup)"
+    )
     return f"""<!doctype html>
 <html>
 <head>
@@ -1400,7 +1491,7 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
   <header>
     <h1>Wrench Pairing Explorer</h1>
     <p class="muted">Enter W and X directly. They do not need to be transposes of each other.</p>
-    <p class="muted"><a href="/image-explorer">Open image survivor explorer</a></p>
+    <p class="muted"><a href="{survivor_href}" target="_blank" rel="noopener">{survivor_label}</a></p>
     <form method="get" action="/run">
       <label>W web index, word, or JSON file<input id="w-input" name="w" type="text" value="{w}" placeholder="0447_1231423121323444.json"></label>
       <label>X web index, word, or JSON file<input id="x-input" name="x" type="text" value="{x}" placeholder="0447_1112122334344234.json"></label>
@@ -1535,8 +1626,16 @@ class AppHandler(BaseHTTPRequestHandler):
         if parsed.path == "/":
             self.send_html(page_shell(params))
             return
-        if parsed.path in {"/image-explorer", "/images", "/web-explorer"}:
+        if parsed.path == IMAGE_EXPLORER_ROUTE:
             self.send_html(image_explorer_page())
+            return
+        if parsed.path in {"/image-explorer", "/images", "/web-explorer"}:
+            if SURVIVOR_EXPLORER_URL:
+                self.send_response(302)
+                self.send_header("Location", SURVIVOR_EXPLORER_URL)
+                self.end_headers()
+            else:
+                self.send_html(image_explorer_page())
             return
         if parsed.path == "/run":
             try:
@@ -1562,6 +1661,11 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument(
+        "--survivor-explorer-url",
+        default=None,
+        help="Current survivor explorer URL; overrides PROBLEM3_SURVIVOR_EXPLORER_URL.",
+    )
+    parser.add_argument(
         "--project-root",
         type=Path,
         default=PROJECT_ROOT,
@@ -1572,6 +1676,9 @@ def main() -> None:
         ),
     )
     args = parser.parse_args()
+    global SURVIVOR_EXPLORER_URL
+    if args.survivor_explorer_url is not None:
+        SURVIVOR_EXPLORER_URL = args.survivor_explorer_url.strip()
     configure_project_root(args.project_root)
     warm_lookup_caches()
     server = ThreadingHTTPServer((args.host, args.port), AppHandler)
@@ -1581,4 +1688,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # Keep the historical filename as the collaborator-facing launcher, but
+    # execute the current presentation-aware application and TSV cache layer.
+    from wrench_web_app_0714 import main as current_main
+
+    current_main()

@@ -30,7 +30,11 @@ Wrench pairing webpage
 Put these files/folders in the same folder:
 
   wrench_web_app.py
+  wrench_web_app_0714.py
+  benzene_pairing_cache_20260826.py
+  benzene_pairing_cache_0826.json.gz
   Wrench_or_Skein.py
+  Wrench_or_Skein_0714.py
   hourglass_disk_4x4_all_graph_data/
   hourglass_disk_4x4_promotion_reps_graph_data/
   hourglass_disk_4x4_transpose_words_graph_data/
@@ -49,6 +53,24 @@ To run the webpage:
 Then open this link on the same computer:
 
   http://127.0.0.1:8765/
+
+The small benzene_pairing_cache_0826.json.gz file is generated from the full
+August 26 presentation-dependent TSVs.  For its 2,816 exact W presentations
+and 24,728 exact X presentations, the webpage returns the saved checker value
+before invoking the older live proof engine.  The presentation menus use the
+exact IDs from the TSV, so top/bottom isolated presentations and
+top/middle/bottom chain presentations are never collapsed merely because they
+have the same Yamanouchi word.  A covered value omitted from the sparse cache
+is zero only because the cache certifies complete Cartesian coverage.
+
+For programmatic lookup, use:
+
+  http://127.0.0.1:8765/computed-pairing?w=EXACT_W_ID&x=EXACT_X_ID
+
+The isolated-benzene cache reports the raw FLL values exactly as stored in the
+latest TSV and displays the unresolved paper-tagged versus intrinsic-basis
+convention note.  It does not silently change smoothing signs.  The chain
+dataset is marked verified.
 
 The page uses a compact step summary by default so it loads quickly. Check
 "show full step pictures" before running if you want the full visual proof

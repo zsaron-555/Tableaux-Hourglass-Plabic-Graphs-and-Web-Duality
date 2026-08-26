@@ -17,6 +17,11 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import Wrench_or_Skein_0714 as wrench
+from benzene_pairing_cache_20260826 import (
+    BenzenePairingCache,
+    PairingCacheError,
+    PairingLookup,
+)
 from benzene_representations import (
     classify_benzene_representation,
     presentation_paths_for_word,
@@ -33,6 +38,7 @@ SURVIVOR_CSV_NAME = "lemma46_survivors.csv"
 PROMOTION_TABLE_PATH = Path("hourglass_disk_4x4_promotion_reps") / "promotion_orbits_4x4.tsv"
 IMAGE_EXPLORER_HTML_NAME = "web_explorer_v4.html"
 IMAGE_EXPLORER_ROUTE = f"/{IMAGE_EXPLORER_HTML_NAME}"
+BENZENE_PAIRING_CACHE_NAME = "benzene_pairing_cache_0826.json.gz"
 SURVIVOR_EXPLORER_URL = os.environ.get("PROBLEM3_SURVIVOR_EXPLORER_URL", "").strip()
 REP_IMAGE_FOLDER_NAME = "hourglass_disk_4x4_promotion_reps"
 PROJECT_ROOT = Path(os.environ.get("PROBLEM3_ROOT", APP_DIR)).expanduser().resolve()
@@ -43,6 +49,14 @@ SURVIVOR_CSV = PROJECT_ROOT / SURVIVOR_CSV_NAME
 PROMOTION_TABLE = PROJECT_ROOT / PROMOTION_TABLE_PATH
 IMAGE_EXPLORER_HTML = PROJECT_ROOT / IMAGE_EXPLORER_HTML_NAME
 REP_IMAGE_DIR = PROJECT_ROOT / REP_IMAGE_FOLDER_NAME
+BENZENE_PAIRING_CACHE_PATH = Path(
+    os.environ.get(
+        "PROBLEM3_BENZENE_PAIRING_CACHE",
+        str(PROJECT_ROOT / BENZENE_PAIRING_CACHE_NAME),
+    )
+).expanduser().resolve()
+_BENZENE_PAIRING_CACHE: Optional[BenzenePairingCache] = None
+_BENZENE_PAIRING_CACHE_ERROR: Optional[str] = None
 _SURVIVOR_CACHE: Optional[Tuple[float, Dict[str, Any]]] = None
 _PROMOTION_ORBIT_CACHE: Optional[Dict[int, List[str]]] = None
 _PROMOTION_REP_CACHE: Optional[Dict[str, Tuple[int, str]]] = None
@@ -68,6 +82,358 @@ def param_bool(params: Dict[str, str], name: str, default: bool = True) -> bool:
     if raw is None or raw == "":
         return default
     return str(raw).lower() not in {"0", "false", "no", "off"}
+
+
+def _first_terminal_value(record: Dict[str, Any], *names: str) -> Any:
+    """Return the first explicitly stored, non-null terminal field."""
+    for name in names:
+        if name in record and record[name] is not None:
+            return record[name]
+    return None
+
+
+def _terminal_alias_conflict(
+    record: Dict[str, Any],
+    names: Tuple[str, ...],
+    *,
+    label: str,
+) -> Optional[str]:
+    """Describe contradictory serialized aliases, if more than one is present."""
+    present = [
+        (name, record[name])
+        for name in names
+        if name in record and record[name] is not None
+    ]
+    if len(present) < 2:
+        return None
+    normalized_values = {str(value) for _name, value in present}
+    if len(normalized_values) == 1:
+        return None
+    rendered = ", ".join(f"{name}={value!r}" for name, value in present)
+    return (
+        f"Contradictory {label} aliases were serialized ({rendered}). "
+        f"Display precedence is {names[0]} first; no stored field was rewritten."
+    )
+
+
+def _component_word_inversion_sign(word: Iterable[Any]) -> Tuple[List[int], int]:
+    values = [int(value) for value in word]
+    inversions = sum(
+        values[left] > values[right]
+        for left in range(len(values))
+        for right in range(left + 1, len(values))
+    )
+    return values, (-1 if inversions % 2 else 1)
+
+
+def normalize_terminal_evaluation_record(evaluation: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize exact and legacy terminal records without recomputing a value.
+
+    Exact scheduler records use ``coefficient``, ``count``, and ``contribution``;
+    the older website engine uses ``coeff``, ``coloring_count``, and
+    ``term_value``.  This adapter exposes both spellings for display while
+    treating the contribution already stored in the record as authoritative.
+
+    In particular, missing terminal signs are never replaced by ``+1``.  The
+    exact decomposition is available only when every factor used by the exact
+    scheduler was actually serialized in the record.
+    """
+    out = dict(evaluation)
+    warnings: List[str] = [
+        str(message)
+        for message in evaluation.get("terminal_sign_identity_warnings", [])
+        if str(message)
+    ]
+
+    alias_groups = (
+        (("coefficient", "coeff"), "coefficient"),
+        (("count", "coloring_count", "unsigned_coloring_count"), "unsigned-count"),
+        (("contribution", "term_value", "stored_contribution"), "contribution"),
+        (("source_orientation_sign", "orientation_sign"), "source-orientation"),
+    )
+    for names, label in alias_groups:
+        conflict = _terminal_alias_conflict(out, names, label=label)
+        if conflict:
+            warnings.append(conflict)
+
+    coefficient = _first_terminal_value(out, "coefficient", "coeff")
+    unsigned_count = _first_terminal_value(
+        out, "count", "coloring_count", "unsigned_coloring_count"
+    )
+    stored_contribution = _first_terminal_value(
+        out, "contribution", "term_value", "stored_contribution"
+    )
+    source_orientation = _first_terminal_value(
+        out, "source_orientation_sign", "orientation_sign"
+    )
+
+    if coefficient is not None:
+        coefficient = int(coefficient)
+        out["coefficient"] = coefficient
+        out["coeff"] = coefficient
+    if unsigned_count is not None:
+        unsigned_count = int(unsigned_count)
+        out["count"] = unsigned_count
+        out["coloring_count"] = unsigned_count
+        out["unsigned_coloring_count"] = unsigned_count
+    if stored_contribution is not None:
+        stored_contribution = int(stored_contribution)
+        out["contribution"] = stored_contribution
+        out["term_value"] = stored_contribution
+        out["stored_contribution"] = stored_contribution
+    if source_orientation is not None:
+        source_orientation = int(source_orientation)
+        out["source_orientation_sign"] = source_orientation
+        out["orientation_sign"] = source_orientation
+
+    exact_factor_names = (
+        "source_web_sign",
+        "coefficient",
+        "count",
+        "signed_coloring_count",
+        "source_orientation_sign",
+        "source_determinant_color_sign",
+        "terminal_component_word_inversion_sign",
+        "colored_tensor_signed_count",
+    )
+    missing = [
+        name
+        for name in exact_factor_names
+        if name not in out or out[name] is None
+    ]
+    exact_available = not missing
+    out["terminal_sign_decomposition_available"] = exact_available
+    out["terminal_sign_decomposition_missing_fields"] = missing
+
+    if exact_available:
+        for name in exact_factor_names:
+            out[name] = int(out[name])
+        for name in (
+            "source_web_sign",
+            "source_orientation_sign",
+            "terminal_component_word_inversion_sign",
+        ):
+            if out[name] not in {-1, 1}:
+                warnings.append(
+                    f"Invalid exact sign factor: {name} is {out[name]}, expected +1 or -1."
+                )
+        if out["source_determinant_color_sign"] != 1:
+            warnings.append(
+                "Invalid retired determinant-color compatibility field: expected +1."
+            )
+        calculated_signed_count = (
+            out["source_orientation_sign"] * int(unsigned_count)
+        )
+        calculated_contribution = (
+            out["source_web_sign"]
+            * out["coefficient"]
+            * out["signed_coloring_count"]
+        )
+        fully_expanded_contribution = (
+            out["source_web_sign"]
+            * out["coefficient"]
+            * calculated_signed_count
+        )
+        out["calculated_signed_coloring_count"] = calculated_signed_count
+        out["calculated_contribution_from_stored_signed_count"] = calculated_contribution
+        out["calculated_fully_expanded_contribution"] = fully_expanded_contribution
+
+        component_word = out.get("terminal_component_word")
+        if component_word is None:
+            warnings.append(
+                "The serialized terminal component-color word is missing, so its "
+                "inversion sign cannot be independently checked."
+            )
+        elif not isinstance(component_word, (list, tuple)):
+            warnings.append(
+                "The serialized terminal component-color word is not a list, so its "
+                "inversion sign cannot be independently checked."
+            )
+        else:
+            try:
+                normalized_word, calculated_word_sign = _component_word_inversion_sign(
+                    component_word
+                )
+            except (TypeError, ValueError):
+                warnings.append(
+                    "The serialized terminal component-color word contains a non-integer "
+                    "entry, so its inversion sign cannot be independently checked."
+                )
+            else:
+                out["terminal_component_word"] = normalized_word
+                out["calculated_terminal_component_word_inversion_sign"] = (
+                    calculated_word_sign
+                )
+                if (
+                    out["terminal_component_word_inversion_sign"]
+                    != calculated_word_sign
+                ):
+                    warnings.append(
+                        "Terminal component-word inversion mismatch: the serialized word "
+                        f"has inversion sign {calculated_word_sign}, but the stored sign is "
+                        f"{out['terminal_component_word_inversion_sign']}."
+                    )
+
+        count_exactness = out.get("count_is_exact")
+        tensor_exactness = out.get("colored_tensor_signed_count_is_exact")
+        if count_exactness is not True:
+            if count_exactness is False:
+                warnings.append(
+                    "The unsigned proper-coloring search was truncated; its displayed "
+                    "count is only a lower bound."
+                )
+            else:
+                warnings.append(
+                    "Unsigned proper-coloring count exactness was not serialized, so the "
+                    "terminal identity cannot be labeled fully verified."
+                )
+        if tensor_exactness is not True:
+            if tensor_exactness is False:
+                warnings.append(
+                    "The colored-tensor signed-sum search was truncated; its displayed "
+                    "signed sum is incomplete."
+                )
+            else:
+                warnings.append(
+                    "Colored-tensor signed-sum exactness was not serialized, so the "
+                    "terminal identity cannot be labeled fully verified."
+                )
+
+        if out["signed_coloring_count"] != calculated_signed_count:
+            warnings.append(
+                "Exact FLL terminal-conversion mismatch: stored "
+                f"signed_coloring_count is {out['signed_coloring_count']}, but source "
+                "Plucker orientation times the unsigned consistent-labeling count is "
+                f"{calculated_signed_count}."
+            )
+        positive_count = _first_terminal_value(out, "colored_tensor_positive_count")
+        negative_count = _first_terminal_value(out, "colored_tensor_negative_count")
+        if positive_count is not None and negative_count is not None:
+            positive_count = int(positive_count)
+            negative_count = int(negative_count)
+            out["colored_tensor_positive_count"] = positive_count
+            out["colored_tensor_negative_count"] = negative_count
+            if (
+                unsigned_count is not None
+                and positive_count + negative_count != unsigned_count
+            ):
+                warnings.append(
+                    "Colored-tensor count mismatch: positive plus negative coloring "
+                    f"counts is {positive_count + negative_count}, but the serialized "
+                    f"unsigned coloring count is {unsigned_count}."
+                )
+            if positive_count - negative_count != out["colored_tensor_signed_count"]:
+                warnings.append(
+                    "Colored-tensor signed-sum mismatch: positive minus negative coloring "
+                    f"counts is {positive_count - negative_count}, but the serialized "
+                    f"colored_tensor_signed_count is {out['colored_tensor_signed_count']}."
+                )
+        if stored_contribution is None:
+            warnings.append(
+                "No stored contribution is present. The website will not create one from "
+                "the displayed factors."
+            )
+        elif stored_contribution != calculated_contribution:
+            warnings.append(
+                "Stored contribution mismatch: the authoritative stored contribution is "
+                f"{stored_contribution}, but source_web_sign × coefficient × "
+                f"signed_coloring_count is {calculated_contribution}. The website has not "
+                "replaced the stored contribution."
+            )
+    else:
+        missing_text = ", ".join(missing)
+        out["terminal_sign_decomposition_note"] = (
+            "Exact terminal-sign decomposition is unavailable in this legacy or partial "
+            f"record; missing serialized fields: {missing_text}. The stored contribution "
+            "is shown unchanged."
+        )
+
+    warnings = list(dict.fromkeys(warnings))
+    out["terminal_sign_identity_warnings"] = warnings
+    out["terminal_sign_identities_verified"] = bool(exact_available and not warnings)
+    return out
+
+
+def terminal_coloring_color_maps(
+    sample: Dict[str, Any],
+    edge_key: str = "sample_edge_colors",
+    hourglass_key: str = "sample_hourglass_colors",
+) -> Tuple[Dict[Tuple[int, int], str], Dict[Tuple[int, int], Tuple[str, str]]]:
+    """Convert either production exact or legacy coloring witnesses for SVG use."""
+    edge_colors: Dict[Tuple[int, int], str] = {}
+    hourglass_colors: Dict[Tuple[int, int], Tuple[str, str]] = {}
+
+    # Legacy website witness schema.
+    for item in sample.get(edge_key, []):
+        edge = item.get("edge", [])
+        if len(edge) != 2:
+            continue
+        color = COLORS.get(int(item.get("color", 0)), "#111")
+        edge_colors[tuple(sorted((int(edge[0]), int(edge[1]))))] = color
+    for item in sample.get(hourglass_key, []):
+        edge = item.get("edge", [])
+        colors = item.get("colors", [])
+        if len(edge) != 2 or len(colors) != 2:
+            continue
+        hourglass_colors[tuple(sorted((int(edge[0]), int(edge[1]))))] = (
+            COLORS.get(int(colors[0]), "#111"),
+            COLORS.get(int(colors[1]), "#111"),
+        )
+
+    # Production exact witness schema from exact_coloring_data().  Hourglass
+    # strand order comes from the persistent bundle frame's ordered_colors,
+    # not from physical-edge IDs.
+    bundle_endpoints: Dict[int, Tuple[int, int]] = {}
+    bundle_fallback_colors: Dict[int, List[Tuple[int, int]]] = {}
+    for item in sample.get("physical_edge_colors", []):
+        endpoints = item.get("endpoints", [])
+        if len(endpoints) != 2:
+            continue
+        edge = tuple(sorted((int(endpoints[0]), int(endpoints[1]))))
+        color_number = int(item.get("color", 0))
+        bundle = item.get("bundle")
+        kind = str(item.get("kind", "ordinary"))
+        if kind == "hourglass" or bundle is not None:
+            if bundle is None:
+                continue
+            bundle_id = int(bundle)
+            bundle_endpoints[bundle_id] = edge
+            bundle_fallback_colors.setdefault(bundle_id, []).append(
+                (int(item.get("physical_edge", 0)), color_number)
+            )
+        else:
+            edge_colors[edge] = COLORS.get(color_number, "#111")
+
+    rendered_bundles: Set[int] = set()
+    for item in sample.get("hourglass_bundle_color_pairs", []):
+        bundle = item.get("bundle")
+        colors = item.get("ordered_colors", [])
+        if bundle is None or len(colors) != 2:
+            continue
+        bundle_id = int(bundle)
+        edge = bundle_endpoints.get(bundle_id)
+        if edge is None:
+            continue
+        hourglass_colors[edge] = (
+            COLORS.get(int(colors[0]), "#111"),
+            COLORS.get(int(colors[1]), "#111"),
+        )
+        rendered_bundles.add(bundle_id)
+
+    # Old development exact records sometimes omitted the frame-color audit.
+    # Preserve their visibility, but make no claim that physical IDs encode
+    # the mathematical strand frame.
+    for bundle_id, physical_colors in bundle_fallback_colors.items():
+        if bundle_id in rendered_bundles or len(physical_colors) != 2:
+            continue
+        edge = bundle_endpoints[bundle_id]
+        ordered = [color for _physical, color in sorted(physical_colors)]
+        hourglass_colors[edge] = (
+            COLORS.get(int(ordered[0]), "#111"),
+            COLORS.get(int(ordered[1]), "#111"),
+        )
+
+    return edge_colors, hourglass_colors
 
 
 def ensure_coloring_witnesses_for_display(
@@ -258,7 +624,7 @@ def locate_representative_dirs(project_root: Path) -> Tuple[Path, Path]:
 
 
 def configure_project_root(project_root: str | Path) -> None:
-    global PROJECT_ROOT, X_DIR, W_DIR, ALL_DIR, SURVIVOR_CSV, PROMOTION_TABLE, IMAGE_EXPLORER_HTML, REP_IMAGE_DIR, _SURVIVOR_CACHE, _PROMOTION_ORBIT_CACHE, _PROMOTION_REP_CACHE, _ACTUAL_SURVIVOR_CACHE, _GRAPH_DIR_CACHE, _FORK_CACHE, _PROMOTED_WORD_CACHE
+    global PROJECT_ROOT, X_DIR, W_DIR, ALL_DIR, SURVIVOR_CSV, PROMOTION_TABLE, IMAGE_EXPLORER_HTML, REP_IMAGE_DIR, BENZENE_PAIRING_CACHE_PATH, _BENZENE_PAIRING_CACHE, _BENZENE_PAIRING_CACHE_ERROR, _SURVIVOR_CACHE, _PROMOTION_ORBIT_CACHE, _PROMOTION_REP_CACHE, _ACTUAL_SURVIVOR_CACHE, _GRAPH_DIR_CACHE, _FORK_CACHE, _PROMOTED_WORD_CACHE
     PROJECT_ROOT = locate_project_root(project_root)
     X_DIR, W_DIR = locate_representative_dirs(PROJECT_ROOT)
     ALL_DIR = locate_all_dir(PROJECT_ROOT)
@@ -266,6 +632,14 @@ def configure_project_root(project_root: str | Path) -> None:
     PROMOTION_TABLE = find_named_file("promotion_orbits_4x4.tsv", PROJECT_ROOT, relative=PROMOTION_TABLE_PATH)
     IMAGE_EXPLORER_HTML = find_named_file(IMAGE_EXPLORER_HTML_NAME, PROJECT_ROOT)
     REP_IMAGE_DIR = find_named_dir([REP_IMAGE_FOLDER_NAME], PROJECT_ROOT) or (PROJECT_ROOT / REP_IMAGE_FOLDER_NAME)
+    explicit_cache = os.environ.get("PROBLEM3_BENZENE_PAIRING_CACHE", "").strip()
+    BENZENE_PAIRING_CACHE_PATH = (
+        Path(explicit_cache).expanduser().resolve()
+        if explicit_cache
+        else find_named_file(BENZENE_PAIRING_CACHE_NAME, PROJECT_ROOT)
+    )
+    _BENZENE_PAIRING_CACHE = None
+    _BENZENE_PAIRING_CACHE_ERROR = None
     _SURVIVOR_CACHE = None
     _PROMOTION_ORBIT_CACHE = None
     _PROMOTION_REP_CACHE = None
@@ -374,15 +748,82 @@ def graph_word(path: Path) -> str:
     return str(word or stem)
 
 
+def load_benzene_pairing_cache() -> Optional[BenzenePairingCache]:
+    """Load the immutable TSV-derived cache once, without blocking legacy use."""
+
+    global _BENZENE_PAIRING_CACHE, _BENZENE_PAIRING_CACHE_ERROR
+    if _BENZENE_PAIRING_CACHE is not None:
+        return _BENZENE_PAIRING_CACHE
+    if _BENZENE_PAIRING_CACHE_ERROR is not None:
+        return None
+    if not BENZENE_PAIRING_CACHE_PATH.is_file():
+        _BENZENE_PAIRING_CACHE_ERROR = (
+            f"Pairing cache not found: {BENZENE_PAIRING_CACHE_PATH}"
+        )
+        return None
+    try:
+        _BENZENE_PAIRING_CACHE = BenzenePairingCache.load(
+            BENZENE_PAIRING_CACHE_PATH
+        )
+    except (OSError, ValueError, PairingCacheError) as exc:
+        _BENZENE_PAIRING_CACHE_ERROR = f"{type(exc).__name__}: {exc}"
+        return None
+    return _BENZENE_PAIRING_CACHE
+
+
+def _cached_presentation_options(value: str, side: str) -> Dict[str, Any] | None:
+    cache = load_benzene_pairing_cache()
+    if cache is None:
+        return None
+    identifier = str(value).strip()
+    options = cache.options(identifier, side)
+    if not options:
+        return None
+    selected = next(
+        (str(item["value"]) for item in options if item["value"] == identifier),
+        str(options[0]["value"]),
+    )
+    word = str(options[0]["word"])
+    normalized = []
+    for item in options:
+        benzene_type = str(item.get("benzene_type", ""))
+        representation = str(item.get("representation", item.get("state_name", "")))
+        normalized.append(
+            {
+                "value": str(item["value"]),
+                "label": str(item.get("display_label", item["value"])),
+                "representation": representation,
+                "benzene_count": 0 if benzene_type == "none" else (2 if benzene_type == "chain" else 1),
+                "origin": "authoritative_tsv_cache",
+                "presentation": 0,
+                "move_count": 0,
+            }
+        )
+    return {
+        "word": word,
+        "selected": selected,
+        "options": normalized,
+        "authoritative_pairing_cache": True,
+        "cache_id": cache.summary().get("cache_id"),
+    }
+
+
 def benzene_presentation_options(value: str, side: str) -> Dict[str, Any]:
     """Return structurally named exact benzene-presentation choices."""
     if not value.strip():
         return {"word": "", "selected": "", "options": []}
+    cached = _cached_presentation_options(value, side)
+    if cached is not None:
+        return cached
     try:
         path = resolve_graph(value, side)
         word = graph_word(path)
     except Exception as exc:  # noqa: BLE001 - returned as a small UI diagnostic.
         return {"word": "", "selected": "", "options": [], "error": str(exc)}
+
+    cached = _cached_presentation_options(word, side)
+    if cached is not None:
+        return cached
 
     selected = ""
     try:
@@ -861,6 +1302,7 @@ def resolve_transpose_for_original(x_path: Path) -> Path:
 
 def warm_lookup_caches() -> None:
     try:
+        load_benzene_pairing_cache()
         load_survivor_index()
         promotion_orbit_words_by_index()
         if ALL_DIR.exists():
@@ -1782,6 +2224,19 @@ def move_sequence_table(history: List[Dict[str, Any]]) -> str:
                 list(move.get("cycle_vertices", [])) + list(move.get("outer_vertices", [])),
             ),
         )
+        rotation = move.get("rotation_transport", {})
+        if isinstance(rotation, dict) and rotation.get("schema"):
+            before_digest = str(rotation.get("before_sha256", ""))[:10]
+            after_digest = str(rotation.get("after_sha256", ""))[:10]
+            slot_records = len(move.get("replacement_edge_slots", []))
+            ribbon_text = (
+                f"exact; {before_digest} → {after_digest}; "
+                f"{slot_records} rooted replacement edge(s)"
+            )
+            if move.get("lens_rotation_source"):
+                ribbon_text += f"; lens: {move['lens_rotation_source']}"
+        else:
+            ribbon_text = "legacy history: no checkpoint"
         rows.append(
             "<tr>"
             f"<td>{idx}</td>"
@@ -1789,6 +2244,7 @@ def move_sequence_table(history: List[Dict[str, Any]]) -> str:
             f"<td>{html.escape(str(move.get('side', '')))}</td>"
             f"<td>{html.escape(str(target))}</td>"
             f"<td>{html.escape(branch_label)}</td>"
+            f"<td>{html.escape(ribbon_text)}</td>"
             f"<td>{multiplier:+d}</td>"
             f"<td>{running_coeff:+d}</td>"
             "</tr>"
@@ -1796,7 +2252,7 @@ def move_sequence_table(history: List[Dict[str, Any]]) -> str:
     return f"""
     <table class="step-table branch-moves">
       <thead>
-        <tr><th>#</th><th>phase</th><th>web</th><th>local piece</th><th>branch</th><th>sign</th><th>running coeff</th></tr>
+        <tr><th>#</th><th>phase</th><th>web</th><th>local piece</th><th>branch</th><th>ribbon transport</th><th>sign</th><th>running coeff</th></tr>
       </thead>
       <tbody>{''.join(rows)}</tbody>
     </table>
@@ -2274,39 +2730,122 @@ def terminal_branch_records(proof: Dict[str, Any]) -> List[Dict[str, Any]]:
     direct_coloring_evaluations = list(proof.get("coloring_evaluations", []))
     if direct_coloring_evaluations:
         for idx, term in enumerate(direct_coloring_evaluations, start=1):
-            status = str(term.get("status", ""))
-            value = term.get("term_value")
+            normalized = normalize_terminal_evaluation_record(term)
+            status = str(normalized.get("status", ""))
+            value = normalized.get("stored_contribution")
             records.append(
                 {
                     "id": f"C{idx:03d}",
                     "kind": "coloring",
                     "status": "colored" if value is not None else "not computed",
-                    "coeff": term.get("coeff", ""),
+                    "coeff": normalized.get("coefficient", ""),
                     "value": value,
-                    "history": term.get("history", []),
-                    "forks": term.get("common_forks", []),
-                    "reason": term.get("reason", status),
-                    "coloring_count": term.get("coloring_count"),
-                    "orientation_sign": term.get("source_orientation_sign", 1),
-                    "signed_coloring_count": term.get(
-                        "signed_coloring_count", term.get("coloring_count")
+                    "history": normalized.get("history", []),
+                    "forks": normalized.get("common_forks", []),
+                    "reason": normalized.get("reason", status),
+                    "coloring_count": normalized.get("coloring_count"),
+                    "unsigned_coloring_count": normalized.get("unsigned_coloring_count"),
+                    "orientation_sign": normalized.get("source_orientation_sign"),
+                    "source_orientation_sign": normalized.get("source_orientation_sign"),
+                    "source_web_sign": normalized.get("source_web_sign"),
+                    "source_determinant_color_sign": normalized.get(
+                        "source_determinant_color_sign"
                     ),
-                    "raw": term,
+                    "terminal_component_word": normalized.get("terminal_component_word"),
+                    "terminal_component_word_inversion_sign": normalized.get(
+                        "terminal_component_word_inversion_sign"
+                    ),
+                    "colored_tensor_signed_count": normalized.get(
+                        "colored_tensor_signed_count"
+                    ),
+                    "colored_tensor_positive_count": normalized.get(
+                        "colored_tensor_positive_count"
+                    ),
+                    "colored_tensor_negative_count": normalized.get(
+                        "colored_tensor_negative_count"
+                    ),
+                    "signed_coloring_count": normalized.get("signed_coloring_count"),
+                    "terminal_sign_decomposition_available": normalized.get(
+                        "terminal_sign_decomposition_available", False
+                    ),
+                    "terminal_sign_identity_warnings": normalized.get(
+                        "terminal_sign_identity_warnings", []
+                    ),
+                    "terminal_sign_convention": normalized.get("terminal_sign_convention"),
+                    "terminal_sign_decomposition_note": normalized.get(
+                        "terminal_sign_decomposition_note"
+                    ),
+                    "stored_contribution": normalized.get("stored_contribution"),
+                    "contribution": normalized.get("stored_contribution"),
+                    "raw": normalized,
                 }
             )
+
+    # Exact scheduler checkpoint payloads are read-only display inputs here.
+    # The live website computation above remains on the legacy engine.
+    for idx, term in enumerate(proof.get("terminal_terms", []), start=1):
+        normalized = normalize_terminal_evaluation_record(term)
+        value = normalized.get("stored_contribution")
+        status = str(normalized.get("status", "computed"))
+        records.append(
+            {
+                "id": f"E{idx:03d}",
+                "kind": "exact terminal coloring",
+                "status": "colored" if value is not None else "not computed",
+                "coeff": normalized.get("coefficient", ""),
+                "value": value,
+                "history": normalized.get("history", []),
+                "forks": normalized.get("common_forks", []),
+                "reason": normalized.get("reason", status),
+                "coloring_count": normalized.get("coloring_count"),
+                "unsigned_coloring_count": normalized.get("unsigned_coloring_count"),
+                "orientation_sign": normalized.get("source_orientation_sign"),
+                "source_orientation_sign": normalized.get("source_orientation_sign"),
+                "source_web_sign": normalized.get("source_web_sign"),
+                "source_determinant_color_sign": normalized.get(
+                    "source_determinant_color_sign"
+                ),
+                "terminal_component_word": normalized.get("terminal_component_word"),
+                "terminal_component_word_inversion_sign": normalized.get(
+                    "terminal_component_word_inversion_sign"
+                ),
+                "colored_tensor_signed_count": normalized.get("colored_tensor_signed_count"),
+                "colored_tensor_positive_count": normalized.get(
+                    "colored_tensor_positive_count"
+                ),
+                "colored_tensor_negative_count": normalized.get(
+                    "colored_tensor_negative_count"
+                ),
+                "signed_coloring_count": normalized.get("signed_coloring_count"),
+                "terminal_sign_decomposition_available": normalized.get(
+                    "terminal_sign_decomposition_available", False
+                ),
+                "terminal_sign_identity_warnings": normalized.get(
+                    "terminal_sign_identity_warnings", []
+                ),
+                "terminal_sign_convention": normalized.get("terminal_sign_convention"),
+                "terminal_sign_decomposition_note": normalized.get(
+                    "terminal_sign_decomposition_note"
+                ),
+                "stored_contribution": normalized.get("stored_contribution"),
+                "contribution": normalized.get("stored_contribution"),
+                "raw": normalized,
+            }
+        )
 
     fallback = proof.get("w_expansion_fallback", {})
     fallback_evaluations = list(fallback.get("branch_evaluations", []))
     for idx, term in enumerate(fallback.get("branch_evaluations", []), start=1):
-        status = str(term.get("status", ""))
+        normalized = normalize_terminal_evaluation_record(term)
+        status = str(normalized.get("status", ""))
         if status == "fork_killed":
             kind = "fork lemma after W expansion"
             terminal_status = "killed"
             value = 0
-        elif term.get("term_value") is not None:
+        elif normalized.get("stored_contribution") is not None:
             kind = "coloring"
             terminal_status = "colored"
-            value = term.get("term_value")
+            value = normalized.get("stored_contribution")
         else:
             kind = "coloring"
             terminal_status = "not computed"
@@ -2316,17 +2855,44 @@ def terminal_branch_records(proof: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "id": f"C{idx:03d}",
                 "kind": kind,
                 "status": terminal_status,
-                "coeff": term.get("coeff", ""),
+                "coeff": normalized.get("coefficient", ""),
                 "value": value,
-                "history": term.get("history", []),
-                "forks": term.get("common_forks", []),
-                "reason": term.get("reason", status),
-                "coloring_count": term.get("coloring_count"),
-                "orientation_sign": term.get("source_orientation_sign", 1),
-                "signed_coloring_count": term.get(
-                    "signed_coloring_count", term.get("coloring_count")
+                "history": normalized.get("history", []),
+                "forks": normalized.get("common_forks", []),
+                "reason": normalized.get("reason", status),
+                "coloring_count": normalized.get("coloring_count"),
+                "unsigned_coloring_count": normalized.get("unsigned_coloring_count"),
+                "orientation_sign": normalized.get("source_orientation_sign"),
+                "source_orientation_sign": normalized.get("source_orientation_sign"),
+                "source_web_sign": normalized.get("source_web_sign"),
+                "source_determinant_color_sign": normalized.get(
+                    "source_determinant_color_sign"
                 ),
-                "raw": term,
+                "terminal_component_word": normalized.get("terminal_component_word"),
+                "terminal_component_word_inversion_sign": normalized.get(
+                    "terminal_component_word_inversion_sign"
+                ),
+                "colored_tensor_signed_count": normalized.get("colored_tensor_signed_count"),
+                "colored_tensor_positive_count": normalized.get(
+                    "colored_tensor_positive_count"
+                ),
+                "colored_tensor_negative_count": normalized.get(
+                    "colored_tensor_negative_count"
+                ),
+                "signed_coloring_count": normalized.get("signed_coloring_count"),
+                "terminal_sign_decomposition_available": normalized.get(
+                    "terminal_sign_decomposition_available", False
+                ),
+                "terminal_sign_identity_warnings": normalized.get(
+                    "terminal_sign_identity_warnings", []
+                ),
+                "terminal_sign_convention": normalized.get("terminal_sign_convention"),
+                "terminal_sign_decomposition_note": normalized.get(
+                    "terminal_sign_decomposition_note"
+                ),
+                "stored_contribution": normalized.get("stored_contribution"),
+                "contribution": normalized.get("stored_contribution"),
+                "raw": normalized,
             }
         )
 
@@ -2385,6 +2951,29 @@ def final_active_branch_count(proof: Dict[str, Any]) -> int:
     return int(proof.get("active_term_count", 0) or 0)
 
 
+def branch_route_move_count_labels(record: Dict[str, Any]) -> Tuple[str, str]:
+    """Return honest ledger labels for legacy histories or exact provenance routes."""
+    if record.get("kind") == "exact terminal coloring":
+        raw = record.get("raw", {})
+        routes = [route for route in raw.get("routes", []) if isinstance(route, dict)]
+        per_route = [
+            len([move for move in route.get("moves", []) if isinstance(move, dict)])
+            for route in routes
+        ]
+        route_count = len(routes)
+        route_label = f"{route_count} exact route{'s' if route_count != 1 else ''}"
+        if per_route:
+            total = sum(per_route)
+            move_label = (
+                f"{total} serialized move{'s' if total != 1 else ''} total; "
+                f"per route {per_route}"
+            )
+        else:
+            move_label = "0 serialized moves; no exact routes stored"
+        return route_label, move_label
+    return "legacy history", str(len(record.get("history", [])))
+
+
 def render_branch_ledger_section(
     x_graph: Dict[str, Any],
     w_graph: Dict[str, Any],
@@ -2401,7 +2990,7 @@ def render_branch_ledger_section(
 
     rows = []
     for record in records:
-        history = record.get("history", [])
+        route_count_text, move_count_text = branch_route_move_count_labels(record)
         forks = record.get("forks", [])
         value = record.get("value")
         value_text = "None" if value is None else str(value)
@@ -2413,7 +3002,8 @@ def render_branch_ledger_section(
         rows.append(
             "<tr>"
             f"<td>{branch_link}</td>"
-            f"<td>{len(history)}</td>"
+            f"<td>{html.escape(route_count_text)}</td>"
+            f"<td>{html.escape(move_count_text)}</td>"
             f"<td>{html.escape(str(record.get('kind', '')))}</td>"
             f"<td>{html.escape(str(record.get('status', '')))}</td>"
             f"<td>{html.escape(str(record.get('coeff', '')))}</td>"
@@ -2423,13 +3013,25 @@ def render_branch_ledger_section(
             "</tr>"
         )
 
-    contributing = [record for record in records if record.get("coloring_count") is not None]
+    contributing = [
+        record for record in records if record.get("stored_contribution") is not None
+    ]
     if contributing:
-        pieces = [
-            f"({record.get('coeff')})*({record.get('orientation_sign', 1)})*{record.get('coloring_count')}"
-            for record in contributing
-        ]
-        total_value = sum(int(record.get("value") or 0) for record in contributing)
+        pieces = []
+        for record in contributing:
+            if (
+                record.get("terminal_sign_decomposition_available")
+                and not record.get("terminal_sign_identity_warnings")
+            ):
+                pieces.append(
+                    f"({record.get('source_web_sign')})*({record.get('coeff')})*"
+                    f"({record.get('signed_coloring_count')})"
+                )
+            else:
+                pieces.append(
+                    f"stored[{record.get('id')}]={record.get('stored_contribution')}"
+                )
+        total_value = sum(int(record.get("stored_contribution")) for record in contributing)
         combo = (" + ".join(pieces).replace("+ (-", "- (") + f" = {total_value}")
     elif any(record.get("value") == 0 for record in records):
         combo = "0"
@@ -2445,7 +3047,7 @@ def render_branch_ledger_section(
       <p><strong>Linear combination:</strong> <span class="word">{html.escape(combo)}</span></p>
       <table class="step-table branch-ledger-table">
         <thead>
-          <tr><th>branch</th><th>moves</th><th>terminal rule</th><th>status</th><th>coeff</th><th>value</th><th>fork(s)</th><th>details</th></tr>
+          <tr><th>branch</th><th>route source</th><th>moves</th><th>terminal rule</th><th>status</th><th>coeff</th><th>value</th><th>fork(s)</th><th>details</th></tr>
         </thead>
         <tbody>{''.join(rows)}</tbody>
       </table>
@@ -2550,20 +3152,25 @@ def render_branch_view(params: Dict[str, str]) -> str:
         return f'<p class="muted">Could not find branch {html.escape(branch_id)}.</p>'
 
     history = record.get("history", [])
+    is_exact_terminal = record.get("kind") == "exact terminal coloring"
     if move_raw == "terminal":
         forks = record.get("forks", [])
         fork = forks[0] if forks else None
         raw = record.get("raw", {})
-        terminal = branch_terminal_picture(
-            context["x_graph"],
-            context["w_graph"],
-            context["x_adj"],
-            context["x_hgs"],
-            context["w_adj"],
-            context["w_hgs"],
-            history,
-            fork,
-            raw.get("lemma49_match") or raw.get("lemma48_match"),
+        terminal = (
+            exact_terminal_route_state_notice(raw)
+            if is_exact_terminal
+            else branch_terminal_picture(
+                context["x_graph"],
+                context["w_graph"],
+                context["x_adj"],
+                context["x_hgs"],
+                context["w_adj"],
+                context["w_hgs"],
+                history,
+                fork,
+                raw.get("lemma49_match") or raw.get("lemma48_match"),
+            )
         )
         if raw.get("term_value") is not None:
             coloring = render_coloring_section(
@@ -2581,10 +3188,14 @@ def render_branch_view(params: Dict[str, str]) -> str:
                     "status": "computed",
                     "active_term_count": 0,
                     "coloring_evaluations": [],
+                    "suppress_terminal_pictures": is_exact_terminal,
                 },
             )
             return terminal + coloring
         return terminal
+
+    if is_exact_terminal:
+        return exact_terminal_route_state_notice(record.get("raw", {}))
 
     try:
         move_index = int(move_raw)
@@ -2628,23 +3239,59 @@ def render_branch_page(params: Dict[str, str]) -> str:
     forks = record.get("forks", [])
     fork = forks[0] if forks else None
     raw = record.get("raw", {})
+    is_exact_terminal = record.get("kind") == "exact terminal coloring"
     count_text = ""
     if record.get("coloring_count") is not None:
-        count_text = (
-            f"; tagged source sign {record.get('orientation_sign', 1)}"
-            f"; coloring count {record.get('coloring_count')}"
-        )
+        count_text = f"; unsigned proper-coloring count {record.get('coloring_count')}"
+        if record.get("terminal_sign_decomposition_available"):
+            count_text += (
+                f"; source-web sign {record.get('source_web_sign')}"
+                f"; signed coloring count {record.get('signed_coloring_count')}"
+            )
+        else:
+            count_text += "; exact terminal-sign decomposition unavailable"
 
-    terminal = branch_terminal_picture(
-        context["x_graph"],
-        context["w_graph"],
-        context["x_adj"],
-        context["x_hgs"],
-        context["w_adj"],
-        context["w_hgs"],
-        history,
-        fork,
-        raw.get("lemma49_match") or raw.get("lemma48_match"),
+    terminal = (
+        exact_terminal_route_state_notice(raw)
+        if is_exact_terminal
+        else branch_terminal_picture(
+            context["x_graph"],
+            context["w_graph"],
+            context["x_adj"],
+            context["x_hgs"],
+            context["w_adj"],
+            context["w_hgs"],
+            history,
+            fork,
+            raw.get("lemma49_match") or raw.get("lemma48_match"),
+        )
+    )
+    branch_growth = (
+        '<p class="relation-warning">Exact provenance routes are listed with the terminal '
+        "digests below. The legacy adjacency renderer is intentionally not used for exact "
+        "route frames.</p>"
+        if is_exact_terminal
+        else branch_process_pictures(
+            context["x_graph"],
+            context["w_graph"],
+            context["x_adj"],
+            context["x_hgs"],
+            context["w_adj"],
+            context["w_hgs"],
+            history,
+        )
+    )
+    coefficient_note = (
+        '<p class="muted"><strong>Coefficient check:</strong> use the serialized exact '
+        "provenance-route coefficients in the route table below.</p>"
+        if is_exact_terminal
+        else coefficient_explanation(record)
+    )
+    move_sequence = (
+        '<p class="relation-warning">The exact move sequences are serialized under '
+        "provenance routes in the terminal checkpoint section below.</p>"
+        if is_exact_terminal
+        else move_sequence_table(history)
     )
     coloring = ""
     if raw.get("term_value") is not None:
@@ -2663,6 +3310,7 @@ def render_branch_page(params: Dict[str, str]) -> str:
                 "status": "computed",
                 "active_term_count": 0,
                 "coloring_evaluations": [],
+                "suppress_terminal_pictures": is_exact_terminal,
             },
         )
 
@@ -2675,7 +3323,7 @@ def render_branch_page(params: Dict[str, str]) -> str:
             <p><a href="{html.escape(back_href)}">Back to Branch Ledger</a></p>
             <p><strong>Terminal relation:</strong> {html.escape(str(record.get('kind', '')))}. <span class="muted">{html.escape(str(record.get('reason', '')))}{html.escape(count_text)}</span></p>
             <p><strong>Status:</strong> {html.escape(str(record.get('status', '')))} &nbsp; <strong>Coefficient:</strong> {html.escape(str(record.get('coeff', '')))} &nbsp; <strong>Value:</strong> {html.escape(str(record.get('value', 'None')))}</p>
-            {coefficient_explanation(record)}
+            {coefficient_note}
           </div>
         </section>
         {coefficient_provenance_table(record)}
@@ -2684,14 +3332,14 @@ def render_branch_page(params: Dict[str, str]) -> str:
             <div><strong>Move Sequence</strong></div>
             <div class="muted">This is the complete sequence along this branch.</div>
           </div>
-          {move_sequence_table(history)}
+          {move_sequence}
         </section>
         <section class="step">
           <div class="step-head">
             <div><strong>Branch Growth Pictures</strong></div>
             <div class="muted">Before/after pictures for every relation applied on this branch.</div>
           </div>
-          {branch_process_pictures(context["x_graph"], context["w_graph"], context["x_adj"], context["x_hgs"], context["w_adj"], context["w_hgs"], history)}
+          {branch_growth}
         </section>
         <section class="step">
           <div class="step-head">
@@ -2797,7 +3445,105 @@ def render_zero_discharge_if_present(params: Dict[str, str]) -> Optional[str]:
     )
 
 
+def lookup_cached_pairing(
+    params: Dict[str, str], *, require_cache_match: bool = False
+) -> Optional[PairingLookup]:
+    """Resolve one exact presentation pair against the latest TSV cache."""
+
+    cache = load_benzene_pairing_cache()
+    if cache is None:
+        if require_cache_match:
+            raise ValueError(_BENZENE_PAIRING_CACHE_ERROR or "Pairing cache unavailable.")
+        return None
+    raw_survivor = selected_survivor_for_params(params)
+    w_value = (
+        params.get("w_presentation_id", "").strip()
+        or params.get("w", "").strip()
+    )
+    x_value = (
+        params.get("x_presentation_id", "").strip()
+        or raw_survivor
+        or params.get("x", "").strip()
+    )
+    if not w_value or not x_value:
+        if require_cache_match:
+            raise ValueError("Both exact W and X presentation identifiers are required.")
+        return None
+    w_id, w_options = cache.resolve(w_value, "W")
+    x_id, x_options = cache.resolve(x_value, "X")
+    if w_id is None and w_options:
+        raise ValueError(
+            "W has multiple computed presentations. Choose the exact W presentation "
+            f"from the menu ({len(w_options)} choices)."
+        )
+    if x_id is None and x_options:
+        raise ValueError(
+            "X has multiple computed presentations. Choose the exact X presentation "
+            f"from the menu ({len(x_options)} choices)."
+        )
+    if w_id is None or x_id is None:
+        if require_cache_match:
+            raise ValueError(
+                "This exact W/X presentation pair is outside the latest benzene TSV corpus."
+            )
+        return None
+    lookup = cache.lookup(w_id, x_id)
+    if lookup is None and require_cache_match:
+        raise ValueError("The selected presentations are not jointly covered by the cache.")
+    return lookup
+
+
+def render_cached_pairing_result(
+    params: Dict[str, str], lookup: PairingLookup
+) -> str:
+    record = lookup.as_dict()
+    w = record["w"]
+    x = record["x"]
+    dataset = record["dataset"]
+    zero_note = (
+        "The complete TSV contains this W/X presentation pair in its certified "
+        "zero partition; zero is not inferred from an absent computation."
+        if record["value_source"] == "certified_zero_complete_coverage"
+        else "This nonzero value is stored explicitly in the compact cache."
+    )
+    conjecture_status = str(dataset.get("conjecture_status", ""))
+    status_note = (
+        f"The dataset-level conjecture status is {conjecture_status}. Individual "
+        "pairing values remain the authoritative raw FLL values from the source TSV."
+    )
+    source_hash = str(dataset.get("source_tsv_sha256", ""))
+    return page_shell(
+        params,
+        f"""
+        <section class="summary">
+          <div>
+            <h2>Authoritative Cached Pairing Result</h2>
+            <p><strong>W:</strong> <span class="word">{html.escape(str(w['word']))}</span> — {html.escape(str(w.get('state_name', '')))}</p>
+            <p class="muted">{html.escape(record['w_presentation_id'])}</p>
+            <p><strong>X:</strong> <span class="word">{html.escape(str(x['word']))}</span> — {html.escape(str(x.get('representation', '')))} {html.escape(str(x.get('benzene_type', '')))}</p>
+            <p class="muted">{html.escape(record['x_presentation_id'])}</p>
+          </div>
+          <div class="result-pill">TSV cache</div>
+          <div class="metric"><span>Final pairing value</span><strong>{int(record['value'])}</strong></div>
+          <div class="metric"><span>Dataset</span><strong style="font-size:15px">{html.escape(str(dataset.get('label', '')))}</strong></div>
+        </section>
+        <section class="toc">
+          <h2>Why this value matches the latest computation</h2>
+          <p>{html.escape(zero_note)}</p>
+          <p>{html.escape(status_note)}</p>
+          <p><strong>Terminal convention:</strong> <span class="word">{html.escape(str(record['cache'].get('terminal_convention_id', '')))}</span></p>
+          <p><strong>Source TSV:</strong> {html.escape(str(dataset.get('source_tsv', '')))}</p>
+          <p><strong>Source SHA-256:</strong> <span class="word">{html.escape(source_hash)}</span></p>
+          <p class="muted">{html.escape(str(dataset.get('convention_note', '')))}</p>
+        </section>
+        """,
+    )
+
+
 def run_pair(params: Dict[str, str]) -> str:
+    cached_lookup = lookup_cached_pairing(params)
+    if cached_lookup is not None:
+        return render_cached_pairing_result(params, cached_lookup)
     zero_discharge = render_zero_discharge_if_present(params)
     if zero_discharge is not None:
         return zero_discharge
@@ -3145,6 +3891,150 @@ def render_relation_rule_section(w_graph: Dict[str, Any], x_graph: Dict[str, Any
     """
 
 
+def exact_terminal_route_state_notice(evaluation: Dict[str, Any]) -> str:
+    """Explain why an exact checkpoint terminal is not drawn by the legacy renderer."""
+    routes = [route for route in evaluation.get("routes", []) if isinstance(route, dict)]
+    rows = []
+    for index, route in enumerate(routes, start=1):
+        moves = [move for move in route.get("moves", []) if isinstance(move, dict)]
+        relations = [str(move.get("relation", "unknown")) for move in moves]
+        rows.append(
+            "<tr>"
+            f"<td>{index}</td>"
+            f"<td>{html.escape(str(route.get('label', '')))}</td>"
+            f"<td>{html.escape(str(route.get('initial_route_coefficient')))}</td>"
+            f"<td>{html.escape(str(route.get('coefficient')))}</td>"
+            f"<td>{len(moves)}</td>"
+            f"<td>{html.escape(', '.join(relations))}</td>"
+            "</tr>"
+        )
+    route_table = (
+        "<table class=\"step-table\"><thead><tr><th>route</th><th>label</th>"
+        "<th>initial coeff</th><th>final coeff</th><th>moves</th><th>relations</th>"
+        f"</tr></thead><tbody>{''.join(rows)}</tbody></table>"
+        if rows
+        else '<p class="muted">No serialized provenance routes were included.</p>'
+    )
+    serialized_routes = html.escape(json.dumps(routes, indent=2, sort_keys=True))
+    return f"""
+    <section class="step exact-terminal-visualization-unavailable">
+      <h2>Exact route/state visualization unavailable</h2>
+      <p class="relation-warning">This exact terminal checkpoint stores terminal state
+      digests and provenance routes, but not a directly rendered legacy adjacency state.
+      The website will not display the initial catalogue web as though it were the terminal
+      exact ribbon state.</p>
+      <p><strong>Terminal W digest:</strong> <span class="word">{html.escape(str(evaluation.get('w_digest', 'unavailable')))}</span></p>
+      <p><strong>Terminal X digest:</strong> <span class="word">{html.escape(str(evaluation.get('x_digest', 'unavailable')))}</span></p>
+      {route_table}
+      <details><summary>Serialized exact provenance routes ({len(routes)})</summary>
+        <pre style="white-space:pre-wrap;overflow-wrap:anywhere">{serialized_routes}</pre>
+      </details>
+    </section>
+    """
+
+
+def terminal_sign_audit_html(evaluation: Dict[str, Any]) -> str:
+    """Render the serialized terminal formula without changing its contribution."""
+    ev = normalize_terminal_evaluation_record(evaluation)
+    stored_contribution = ev.get("stored_contribution")
+    stored_line = (
+        f"<p><strong>Stored contribution (authoritative):</strong> "
+        f"{html.escape(str(stored_contribution))}</p>"
+        if stored_contribution is not None
+        else "<p><strong>Stored contribution:</strong> unavailable</p>"
+    )
+    warnings = list(ev.get("terminal_sign_identity_warnings", []))
+    warning_panel = (
+        '<div class="conflict-list"><strong>Terminal-sign identity warning</strong>'
+        + "".join(
+            f'<div class="conflict-item">{html.escape(str(message))}</div>'
+            for message in warnings
+        )
+        + "</div>"
+        if warnings
+        else ""
+    )
+
+    if not ev.get("terminal_sign_decomposition_available"):
+        legacy_orientation = ""
+        if ev.get("source_orientation_sign") is not None:
+            legacy_orientation = (
+                "<p class=\"muted\"><strong>Legacy source-orientation metadata:</strong> "
+                f"{html.escape(str(ev.get('source_orientation_sign')))}. This field alone "
+                "is not an exact terminal-sign decomposition.</p>"
+            )
+        return (
+            '<div class="terminal-sign-audit">'
+            f"{stored_line}{legacy_orientation}"
+            f'<div class="relation-warning">{html.escape(str(ev.get("terminal_sign_decomposition_note", "Exact terminal-sign decomposition unavailable.")))}</div>'
+            f"{warning_panel}"
+            "</div>"
+        )
+
+    word_line = ""
+    if ev.get("terminal_component_word") is not None:
+        word_line = (
+            "<p><strong>Terminal component-color word:</strong> "
+            f"<span class=\"word\">{html.escape(str(ev.get('terminal_component_word')))}</span></p>"
+        )
+    convention_line = ""
+    if ev.get("terminal_sign_convention"):
+        convention_line = (
+            "<p class=\"muted\"><strong>Serialized sign convention:</strong> "
+            f"{html.escape(str(ev.get('terminal_sign_convention')))}</p>"
+        )
+    tensor_breakdown = ""
+    if (
+        ev.get("colored_tensor_positive_count") is not None
+        and ev.get("colored_tensor_negative_count") is not None
+    ):
+        tensor_breakdown = (
+            "<p><strong>Colored tensor signs among proper colorings:</strong> "
+            f"{html.escape(str(ev.get('colored_tensor_positive_count')))} positive, "
+            f"{html.escape(str(ev.get('colored_tensor_negative_count')))} negative.</p>"
+        )
+
+    signed_formula = (
+        f"({ev['source_orientation_sign']}) × "
+        f"({ev['terminal_component_word_inversion_sign']}) × "
+        f"({ev['colored_tensor_signed_count']}) = "
+        f"{ev['calculated_signed_coloring_count']}"
+    )
+    contribution_formula = (
+        f"({ev['source_web_sign']}) × ({ev['coefficient']}) × "
+        f"({ev['signed_coloring_count']}) = "
+        f"{ev['calculated_contribution_from_stored_signed_count']}"
+    )
+    if warnings:
+        check_panel = warning_panel
+    else:
+        check_panel = (
+            '<p class="coloring-audit"><strong>Terminal-sign identities verified '
+            "against the stored contribution.</strong></p>"
+        )
+    return f"""
+    <div class="terminal-sign-audit">
+      <p><strong>Task-level source-web sign:</strong> {html.escape(str(ev['source_web_sign']))}</p>
+      <p><strong>Exact branch coefficient:</strong> {html.escape(str(ev['coefficient']))}</p>
+      <p><strong>Source rooted Plücker-orientation sign:</strong> {html.escape(str(ev['source_orientation_sign']))}</p>
+      <p><strong>Retired determinant-color compatibility field (must be +1):</strong> {html.escape(str(ev['source_determinant_color_sign']))}</p>
+      {word_line}
+      <p><strong>Terminal component-word inversion sign:</strong> {html.escape(str(ev['terminal_component_word_inversion_sign']))}</p>
+      <p><strong>Recomputed component-word inversion sign:</strong> {html.escape(str(ev.get('calculated_terminal_component_word_inversion_sign', 'unavailable')))}</p>
+      <p><strong>Colored live-root tensor signed sum:</strong> {html.escape(str(ev['colored_tensor_signed_count']))}</p>
+      <p><strong>Unsigned coloring count exact:</strong> {html.escape(str(ev.get('count_is_exact', 'not serialized')))}</p>
+      <p><strong>Colored-tensor signed sum exact:</strong> {html.escape(str(ev.get('colored_tensor_signed_count_is_exact', 'not serialized')))}</p>
+      {tensor_breakdown}
+      <p><strong>Stored signed coloring count:</strong> {html.escape(str(ev['signed_coloring_count']))}</p>
+      <p><strong>Signed-coloring identity:</strong> <span class="word">{html.escape(signed_formula)}</span></p>
+      <p><strong>Contribution identity:</strong> <span class="word">{html.escape(contribution_formula)}</span></p>
+      {stored_line}
+      {convention_line}
+      {check_panel}
+    </div>
+    """
+
+
 def render_coloring_section(
     x_graph,
     w_graph,
@@ -3163,6 +4053,7 @@ def render_coloring_section(
             for item in proof.get("coloring_evaluations", [])
             if item.get("status") == "computed"
         ]
+    evaluations = [normalize_terminal_evaluation_record(item) for item in evaluations]
     if not evaluations:
         fallback = proof.get("w_expansion_fallback", {})
         if proof.get("status") == "proved_zero" and proof.get("active_term_count") == 0:
@@ -3217,24 +4108,7 @@ def render_coloring_section(
         edge_key: str = "sample_edge_colors",
         hourglass_key: str = "sample_hourglass_colors",
     ) -> Tuple[Dict[Tuple[int, int], str], Dict[Tuple[int, int], Tuple[str, str]]]:
-        edge_colors: Dict[Tuple[int, int], str] = {}
-        hourglass_colors: Dict[Tuple[int, int], Tuple[str, str]] = {}
-        for item in ev.get(edge_key, []):
-            edge = item.get("edge", [])
-            if len(edge) != 2:
-                continue
-            color = COLORS.get(int(item.get("color", 0)), "#111")
-            edge_colors[tuple(sorted((int(edge[0]), int(edge[1]))))] = color
-        for item in ev.get(hourglass_key, []):
-            edge = item.get("edge", [])
-            colors = item.get("colors", [])
-            if len(edge) != 2 or len(colors) != 2:
-                continue
-            hourglass_colors[tuple(sorted((int(edge[0]), int(edge[1]))))] = (
-                COLORS.get(int(colors[0]), "#111"),
-                COLORS.get(int(colors[1]), "#111"),
-            )
-        return edge_colors, hourglass_colors
+        return terminal_coloring_color_maps(ev, edge_key, hourglass_key)
 
     def boundary_rings(graph: Dict[str, Any], condition: Dict[int, int]) -> Dict[int, str]:
         _, _, _, label_to_node = node_maps(graph)
@@ -3261,17 +4135,45 @@ def render_coloring_section(
             return f"Vertex {node} does not have four incident strands in this terminal state."
         return str(conflict.get("message") or kind.replace("_", " "))
 
-    computed = [ev for ev in evaluations if ev.get("term_value") is not None]
+    computed = [ev for ev in evaluations if ev.get("stored_contribution") is not None]
+    stored_contribution_total: Optional[int] = None
     if computed:
-        pieces = [
-            f"({int(ev.get('coeff', 0))})*({int(ev.get('source_orientation_sign', 1))})*{int(ev.get('coloring_count', 0))}"
-            for ev in computed
-        ]
+        pieces = []
+        for idx, ev in enumerate(computed, start=1):
+            if (
+                ev.get("terminal_sign_decomposition_available")
+                and not ev.get("terminal_sign_identity_warnings")
+            ):
+                pieces.append(
+                    f"({ev.get('source_web_sign')})*({ev.get('coefficient')})*"
+                    f"({ev.get('signed_coloring_count')})"
+                )
+            else:
+                pieces.append(f"stored[C{idx}]={ev.get('stored_contribution')}")
         linear_combo = " + ".join(pieces).replace("+ (-", "- (")
-        linear_combo = f"{linear_combo} = {sum(int(ev.get('term_value', 0)) for ev in computed)}"
+        stored_contribution_total = sum(
+            int(ev.get("stored_contribution")) for ev in computed
+        )
+        linear_combo = f"{linear_combo} = {stored_contribution_total}"
     else:
         linear_combo = "No computed surviving coloring terms."
 
+    reported_final_value = _first_terminal_value(proof, "final_pairing_value", "value")
+    final_value_warning = ""
+    if (
+        reported_final_value is not None
+        and stored_contribution_total is not None
+        and int(reported_final_value) != stored_contribution_total
+    ):
+        final_value_warning = (
+            '<div class="conflict-list"><strong>Final-value identity warning</strong>'
+            '<div class="conflict-item">The stored branch contributions sum to '
+            f"{stored_contribution_total}, but the stored final pairing value is "
+            f"{html.escape(str(reported_final_value))}. Neither stored value has been "
+            "silently replaced.</div></div>"
+        )
+
+    suppress_terminal_pictures = bool(proof.get("suppress_terminal_pictures", False))
     cards = []
     for idx, ev in enumerate(evaluations, start=1):
         status = str(ev.get("status", ""))
@@ -3300,13 +4202,26 @@ def render_coloring_section(
         x_curves = wrench.edge_curves_from_history(history, "X", x_adj)
         w_curves = wrench.edge_curves_from_history(history, "W", w_adj)
 
-        ev = ensure_coloring_witnesses_for_display(
-            ev,
-            w_adj,
-            w_bounds,
-            condition,
-            w_hgs,
-        )
+        if suppress_terminal_pictures:
+            # Never run the legacy adjacency coloring solver against an exact
+            # terminal record: final_x/final_w are the initial catalogue webs,
+            # not the serialized terminal exact ribbon state.
+            ev = dict(ev)
+            ev["display_coloring_count"] = int(
+                ev.get("unsigned_coloring_count", 0) or 0
+            )
+            ev["display_count_is_exact"] = bool(ev.get("count_is_exact", False))
+            ev["display_coloring_samples"] = list(ev.get("coloring_samples", []))
+            ev["display_witness_recomputed"] = False
+            ev["display_count_warning"] = ""
+        else:
+            ev = ensure_coloring_witnesses_for_display(
+                ev,
+                w_adj,
+                w_bounds,
+                condition,
+                w_hgs,
+            )
         count = int(ev.get("display_coloring_count", 0) or 0)
         count_is_exact = bool(ev.get("display_count_is_exact", True))
         samples = [
@@ -3333,6 +4248,25 @@ def render_coloring_section(
             if count_warning
             else ""
         )
+
+        if suppress_terminal_pictures:
+            cards.append(
+                f"""
+                <div class="factor-box">
+                  <h3>Surviving branch {idx}</h3>
+                  <p><strong>Coefficient:</strong> {html.escape(str(ev.get('coefficient')))}</p>
+                  <p><strong>Unsigned proper-coloring count:</strong> {html.escape(str(ev.get('unsigned_coloring_count')))}</p>
+                  {terminal_sign_audit_html(ev)}
+                  <p class="coloring-audit"><strong>{html.escape(count_sentence)}</strong></p>
+                  {witness_note}
+                  <div class="relation-warning"><strong>Exact route/state visualization unavailable.</strong>
+                  The legacy catalogue drawing is suppressed because it is not the serialized
+                  terminal exact ribbon state. See the terminal digests and provenance routes above.</div>
+                  {warning_panel}
+                </div>
+                """
+            )
+            continue
 
         x_picture = draw_web_svg(
             "X: boundary component colors",
@@ -3433,10 +4367,9 @@ def render_coloring_section(
             f"""
             <div class="factor-box">
               <h3>Surviving branch {idx}</h3>
-              <p><strong>Coefficient:</strong> {html.escape(str(ev.get('coeff')))}</p>
-              <p><strong>Tagged source-orientation sign:</strong> {html.escape(str(ev.get('source_orientation_sign', 1)))}</p>
-              <p><strong>Coloring count:</strong> {html.escape(str(ev.get('coloring_count')))}</p>
-              <p><strong>Contribution:</strong> {html.escape(str(ev.get('term_value')))}</p>
+              <p><strong>Coefficient:</strong> {html.escape(str(ev.get('coefficient')))}</p>
+              <p><strong>Unsigned proper-coloring count:</strong> {html.escape(str(ev.get('unsigned_coloring_count')))}</p>
+              {terminal_sign_audit_html(ev)}
               <p class="coloring-audit"><strong>{html.escape(count_sentence)}</strong></p>
               {witness_note}
               <p class="muted">Hourglass strands use unordered distinct color pairs; swapping the two hourglass strand colors is not counted again.</p>
@@ -3456,7 +4389,8 @@ def render_coloring_section(
       <div class="factor-box">
         <h3>Linear Combination</h3>
         <p><span class="word">{html.escape(linear_combo)}</span></p>
-        <p><strong>Final pairing value:</strong> {html.escape(str(proof.get('final_pairing_value')))}</p>
+        <p><strong>Stored final pairing value:</strong> {html.escape(str(reported_final_value))}</p>
+        {final_value_warning}
       </div>
       {''.join(cards)}
     </section>
@@ -3570,16 +4504,16 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
     <p class="muted"><a href="{survivor_href}" target="_blank" rel="noopener">{survivor_label}</a></p>
     <form method="get" action="/run">
       <div class="web-input-group">
-        <label>W web index, word, or JSON file<input id="w-input" name="w" type="text" value="{w}" placeholder="0447_1231423121323444.json"></label>
+        <label>W word, exact presentation ID, index, or JSON file<input id="w-input" name="w" type="text" value="{w}" placeholder="rep0086_rho00_...__top"></label>
         <label class="presentation-choice">Actual W presentation
-          <select id="w-presentation-select" disabled><option>Loading presentations...</option></select>
+          <select id="w-presentation-select" name="w_presentation_id" disabled><option>Loading presentations...</option></select>
           <span class="presentation-status" id="w-presentation-status"></span>
         </label>
       </div>
       <div class="web-input-group">
-        <label>X web index, word, or JSON file<input id="x-input" name="x" type="text" value="{x}" placeholder="0447_1112122334344234.json"></label>
+        <label>X word, exact presentation ID, index, or JSON file<input id="x-input" name="x" type="text" value="{x}" placeholder="catalogue_X_00001_..."></label>
         <label class="presentation-choice">Actual X presentation
-          <select id="x-presentation-select" disabled><option>Loading presentations...</option></select>
+          <select id="x-presentation-select" name="x_presentation_id" disabled><option>Loading presentations...</option></select>
           <span class="presentation-status" id="x-presentation-status"></span>
         </label>
       </div>
@@ -3593,7 +4527,7 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
       <input type="hidden" name="allow_three_strand" value="0">
       <label class="check"><input type="checkbox" name="allow_three_strand" value="1" {allow_three_strand}> allow 3-strand relation</label>
       <label class="check"><input type="checkbox" name="show_steps" value="1" {show_steps}> show full step pictures</label>
-      <button type="submit">Run proof search</button>
+      <button type="submit">Get saved value / run proof</button>
       <div id="survivor-menu-slot">
         {survivor_menu}
       </div>
@@ -3644,9 +4578,11 @@ def page_shell(params: Dict[str, str], body: str = "") -> str:
         }});
         select.disabled = !select.options.length;
         const alternatives = Math.max(0, (payload.options || []).length - 1);
-        status.textContent = alternatives
-          ? alternatives + ' benzene-moved presentation' + (alternatives === 1 ? '' : 's') + ' available.'
-          : 'Only the catalogue presentation is available.';
+        status.textContent = payload.authoritative_pairing_cache
+          ? (payload.options || []).length + ' exact TSV-backed presentation' + ((payload.options || []).length === 1 ? '' : 's') + ' available.'
+          : (alternatives
+              ? alternatives + ' benzene-moved presentation' + (alternatives === 1 ? '' : 's') + ' available.'
+              : 'Only the catalogue presentation is available.');
       }} catch (error) {{
         select.innerHTML = '<option>Presentations unavailable</option>';
         status.textContent = error.message;
@@ -3838,7 +4774,19 @@ class AppHandler(BaseHTTPRequestHandler):
         if self.serve_graph_data(parsed.path):
             return
         if parsed.path == "/health":
-            self.send_json({"app": "wrench_pairing_explorer", "status": "ready"})
+            cache = load_benzene_pairing_cache()
+            self.send_json(
+                {
+                    "app": "wrench_pairing_explorer",
+                    "status": "ready",
+                    "authoritative_benzene_pairing_cache": (
+                        None if cache is None else cache.summary()
+                    ),
+                    "authoritative_benzene_pairing_cache_error": (
+                        _BENZENE_PAIRING_CACHE_ERROR
+                    ),
+                }
+            )
             return
         if parsed.path == "/presentations":
             side = params.get("side", "W").upper()
@@ -3847,6 +4795,15 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             payload = benzene_presentation_options(params.get("value", ""), side)
             self.send_json(payload, status=400 if payload.get("error") else 200)
+            return
+        if parsed.path == "/computed-pairing":
+            try:
+                lookup = lookup_cached_pairing(params, require_cache_match=True)
+                if lookup is None:
+                    raise ValueError("No cached pairing was found.")
+                self.send_json(lookup.as_dict())
+            except ValueError as exc:
+                self.send_json({"error": str(exc)}, status=409)
             return
         if parsed.path == "/":
             self.send_html(page_shell(params))
