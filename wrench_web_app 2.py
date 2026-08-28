@@ -1689,8 +1689,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     # Keep the historical filename as the collaborator-facing launcher, but
-    # execute the combined exact tagged pairing/tree interface.  The legacy
-    # wrench/coloring evaluator is no longer the default production path.
-    from exact_checker_tree_app_20260826 import main as current_main
+    # execute the current presentation-aware application and TSV cache layer.
+    from wrench_web_app_0714 import main as current_main
 
     current_main()

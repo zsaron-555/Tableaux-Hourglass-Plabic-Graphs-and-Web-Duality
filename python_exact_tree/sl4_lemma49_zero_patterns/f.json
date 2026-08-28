@@ -1,0 +1,29 @@
+{
+  "schema": "sl4_lemma49_zero_pair_v1",
+  "id": "sl4_lemma49_f",
+  "source": {"document": "Lem 4.9 abefghi (1).pdf", "pages": [1, 7, 8], "case": "f", "region": "blue-boxed 4x4 analogue"},
+  "matching": {"same_boundary_interval": true, "allow_reflection": true, "allow_pair_swap": true, "rotation_order_source": "counterclockwise_from_embedding"},
+  "conclusion": {"action": "discharge_pair", "reason": "sl4_lemma49_f", "pairing_value": 0},
+  "W": {
+    "boundary_order": ["b1", "b2", "b3", "b4", "b5", "b6"], "ports": ["p1", "p2", "p3", "p4"],
+    "nodes": [
+      {"id":"b1","role":"disk_boundary","color":"black","x":-1.0,"y":0.0},{"id":"b2","role":"disk_boundary","color":"black","x":-0.6,"y":-0.1},{"id":"b3","role":"disk_boundary","color":"black","x":-0.2,"y":-0.16},{"id":"b4","role":"disk_boundary","color":"black","x":0.2,"y":-0.16},{"id":"b5","role":"disk_boundary","color":"black","x":0.6,"y":-0.1},{"id":"b6","role":"disk_boundary","color":"black","x":1.0,"y":0.0},
+      {"id":"l1","role":"internal","color":"white","x":-0.7,"y":0.34},{"id":"k1","role":"internal","color":"black","x":-0.65,"y":1.0},{"id":"u1","role":"internal","color":"white","x":-0.2,"y":0.86},{"id":"k2","role":"internal","color":"black","x":0.4,"y":0.92},{"id":"l2","role":"internal","color":"white","x":0.45,"y":0.34},{"id":"u2","role":"internal","color":"white","x":0.9,"y":0.92},
+      {"id":"p1","role":"window_port","color":"open","x":-0.65,"y":1.5},{"id":"p2","role":"window_port","color":"open","x":-0.2,"y":1.45},{"id":"p3","role":"window_port","color":"open","x":0.9,"y":1.45},{"id":"p4","role":"window_port","color":"open","x":1.2,"y":1.25}
+    ],
+    "edges": [
+      {"id":"e1","u":"b1","v":"l1","kind":"ordinary","multiplicity":1},{"id":"e2","u":"b2","v":"l1","kind":"ordinary","multiplicity":1},{"id":"h1","u":"l1","v":"k1","kind":"hourglass","multiplicity":2},{"id":"e3","u":"k1","v":"u1","kind":"ordinary","multiplicity":1},{"id":"e4","u":"u1","v":"b3","kind":"ordinary","multiplicity":1},{"id":"e5","u":"u1","v":"k2","kind":"ordinary","multiplicity":1},{"id":"h2","u":"k2","v":"l2","kind":"hourglass","multiplicity":2},{"id":"e6","u":"l2","v":"b4","kind":"ordinary","multiplicity":1},{"id":"e7","u":"l2","v":"b5","kind":"ordinary","multiplicity":1},{"id":"e8","u":"k2","v":"u2","kind":"ordinary","multiplicity":1},{"id":"e9","u":"u2","v":"b6","kind":"ordinary","multiplicity":1},{"id":"e10","u":"k1","v":"p1","kind":"ordinary","multiplicity":1},{"id":"e11","u":"u1","v":"p2","kind":"ordinary","multiplicity":1},{"id":"e12","u":"u2","v":"p3","kind":"ordinary","multiplicity":1},{"id":"e13","u":"u2","v":"p4","kind":"ordinary","multiplicity":1}
+    ], "crossings": []
+  },
+  "X": {
+    "boundary_order": ["b1", "b2", "b3", "b4", "b5", "b6"], "ports": ["p1", "p2", "p3"],
+    "nodes": [
+      {"id":"b1","role":"disk_boundary","color":"black","x":-1.0,"y":0.0},{"id":"b2","role":"disk_boundary","color":"black","x":-0.6,"y":-0.1},{"id":"b3","role":"disk_boundary","color":"black","x":-0.2,"y":-0.16},{"id":"b4","role":"disk_boundary","color":"black","x":0.2,"y":-0.16},{"id":"b5","role":"disk_boundary","color":"black","x":0.6,"y":-0.1},{"id":"b6","role":"disk_boundary","color":"black","x":1.0,"y":0.0},
+      {"id":"u1","role":"internal","color":"white","x":-0.75,"y":1.0},{"id":"k1","role":"internal","color":"black","x":-0.35,"y":0.82},{"id":"l1","role":"internal","color":"white","x":-0.35,"y":0.30},{"id":"u2","role":"internal","color":"white","x":0.2,"y":0.82},{"id":"k2","role":"internal","color":"black","x":0.65,"y":0.9},{"id":"l2","role":"internal","color":"white","x":0.65,"y":0.30},
+      {"id":"p1","role":"window_port","color":"open","x":-0.75,"y":1.5},{"id":"p2","role":"window_port","color":"open","x":0.2,"y":1.4},{"id":"p3","role":"window_port","color":"open","x":0.65,"y":1.45}
+    ],
+    "edges": [
+      {"id":"e1","u":"b1","v":"u1","kind":"ordinary","multiplicity":1},{"id":"e2","u":"u1","v":"k1","kind":"ordinary","multiplicity":1},{"id":"h1","u":"k1","v":"l1","kind":"hourglass","multiplicity":2},{"id":"e3","u":"l1","v":"b2","kind":"ordinary","multiplicity":1},{"id":"e4","u":"l1","v":"b3","kind":"ordinary","multiplicity":1},{"id":"e5","u":"k1","v":"u2","kind":"ordinary","multiplicity":1},{"id":"e6","u":"u2","v":"b4","kind":"ordinary","multiplicity":1},{"id":"e7","u":"u2","v":"k2","kind":"ordinary","multiplicity":1},{"id":"h2","u":"k2","v":"l2","kind":"hourglass","multiplicity":2},{"id":"e8","u":"l2","v":"b5","kind":"ordinary","multiplicity":1},{"id":"e9","u":"l2","v":"b6","kind":"ordinary","multiplicity":1},{"id":"e10","u":"u1","v":"p1","kind":"ordinary","multiplicity":1},{"id":"e11","u":"u2","v":"p2","kind":"ordinary","multiplicity":1},{"id":"e12","u":"k2","v":"p3","kind":"ordinary","multiplicity":1}
+    ], "crossings": []
+  }
+}

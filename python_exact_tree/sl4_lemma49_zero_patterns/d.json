@@ -1,0 +1,83 @@
+{
+  "schema": "sl4_lemma49_zero_pair_v1",
+  "id": "sl4_lemma49_d",
+  "source": {
+    "document": "Lem 4.9(d).pdf",
+    "pages": [1],
+    "case": "d",
+    "region": "proposed SL4 analogue"
+  },
+  "matching": {
+    "same_boundary_interval": true,
+    "allow_disk_rotation": true,
+    "allow_reflection": true,
+    "allow_pair_swap": true,
+    "rotation_order_source": "counterclockwise_from_embedding"
+  },
+  "conclusion": {
+    "action": "discharge_pair",
+    "reason": "sl4_lemma49_d",
+    "pairing_value": 0
+  },
+  "W": {
+    "boundary_order": ["b1", "b2", "b3", "b4", "b5", "b6"],
+    "ports": ["p1", "p2"],
+    "nodes": [
+      {"id": "b1", "role": "disk_boundary", "color": "black", "x": -1.25, "y": 0.00},
+      {"id": "b2", "role": "disk_boundary", "color": "black", "x": -0.75, "y": -0.08},
+      {"id": "b3", "role": "disk_boundary", "color": "black", "x": -0.25, "y": -0.10},
+      {"id": "b4", "role": "disk_boundary", "color": "black", "x": 0.25, "y": -0.10},
+      {"id": "b5", "role": "disk_boundary", "color": "black", "x": 0.75, "y": -0.08},
+      {"id": "b6", "role": "disk_boundary", "color": "black", "x": 1.25, "y": 0.00},
+      {"id": "wl", "role": "internal", "color": "white", "x": -0.90, "y": 0.48},
+      {"id": "kl", "role": "internal", "color": "black", "x": -0.82, "y": 1.10},
+      {"id": "wc", "role": "internal", "color": "white", "x": -0.20, "y": 0.98},
+      {"id": "kr", "role": "internal", "color": "black", "x": 0.32, "y": 1.02},
+      {"id": "wr", "role": "internal", "color": "white", "x": 0.90, "y": 0.48},
+      {"id": "p1", "role": "window_port", "color": "open", "x": -0.82, "y": 1.55},
+      {"id": "p2", "role": "window_port", "color": "open", "x": 0.32, "y": 1.55}
+    ],
+    "edges": [
+      {"id": "e1", "u": "b1", "v": "wl", "kind": "ordinary", "multiplicity": 1},
+      {"id": "e2", "u": "b2", "v": "wl", "kind": "ordinary", "multiplicity": 1},
+      {"id": "h1", "u": "wl", "v": "kl", "kind": "hourglass", "multiplicity": 2},
+      {"id": "e3", "u": "kl", "v": "wc", "kind": "ordinary", "multiplicity": 1},
+      {"id": "e4", "u": "wc", "v": "b3", "kind": "ordinary", "multiplicity": 1},
+      {"id": "h2", "u": "wc", "v": "kr", "kind": "hourglass", "multiplicity": 2},
+      {"id": "e5", "u": "kr", "v": "wr", "kind": "ordinary", "multiplicity": 1},
+      {"id": "e6", "u": "wr", "v": "b5", "kind": "ordinary", "multiplicity": 1},
+      {"id": "e7", "u": "wr", "v": "b6", "kind": "ordinary", "multiplicity": 1},
+      {"id": "e8", "u": "kl", "v": "p1", "kind": "ordinary", "multiplicity": 1},
+      {"id": "e9", "u": "kr", "v": "p2", "kind": "ordinary", "multiplicity": 1}
+    ],
+    "crossings": []
+  },
+  "X": {
+    "boundary_order": ["b1", "b2", "b3", "b4", "b5", "b6"],
+    "ports": ["p1", "p2"],
+    "nodes": [
+      {"id": "b1", "role": "disk_boundary", "color": "black", "x": -1.25, "y": 0.00},
+      {"id": "b2", "role": "disk_boundary", "color": "black", "x": -0.75, "y": -0.08},
+      {"id": "b3", "role": "disk_boundary", "color": "black", "x": -0.25, "y": -0.10},
+      {"id": "b4", "role": "disk_boundary", "color": "black", "x": 0.25, "y": -0.10},
+      {"id": "b5", "role": "disk_boundary", "color": "black", "x": 0.75, "y": -0.08},
+      {"id": "b6", "role": "disk_boundary", "color": "black", "x": 1.25, "y": 0.00},
+      {"id": "wo", "role": "internal", "color": "white", "x": 0.00, "y": 1.35},
+      {"id": "wi", "role": "internal", "color": "white", "x": 0.00, "y": 0.58},
+      {"id": "p1", "role": "window_port", "color": "open", "x": -0.35, "y": 1.75},
+      {"id": "p2", "role": "window_port", "color": "open", "x": 0.35, "y": 1.75}
+    ],
+    "edges": [
+      {"id": "e1", "u": "b1", "v": "wo", "kind": "ordinary", "multiplicity": 1},
+      {"id": "e2", "u": "wo", "v": "b6", "kind": "ordinary", "multiplicity": 1},
+      {"id": "e3", "u": "wo", "v": "p1", "kind": "ordinary", "multiplicity": 1},
+      {"id": "e4", "u": "b2", "v": "wi", "kind": "ordinary", "multiplicity": 1},
+      {"id": "e5", "u": "b3", "v": "wi", "kind": "ordinary", "multiplicity": 1},
+      {"id": "e6", "u": "b4", "v": "wi", "kind": "ordinary", "multiplicity": 1},
+      {"id": "e7", "u": "b5", "v": "wi", "kind": "ordinary", "multiplicity": 1},
+      {"id": "e8", "u": "wi", "v": "p2", "kind": "ordinary", "multiplicity": 1}
+    ],
+    "crossings": []
+  }
+}
+
