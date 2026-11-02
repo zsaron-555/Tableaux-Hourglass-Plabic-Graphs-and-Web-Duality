@@ -1,0 +1,33 @@
+{
+  "date": "2026-11-01",
+  "status": "PASS",
+  "webs_checked": 45,
+  "trip_endpoint_comparisons": 2160,
+  "promotion_endpoint_comparisons": 2160,
+  "reference": "Independent Python audit from the preceding analysis",
+  "mathematical_tests": [
+    "paper Figure 1 benchmark",
+    "independent first-balance-point promotion",
+    "promotion rotation and inverse identities",
+    "invalid lattice words rejected",
+    "incorrect tableau word produces mismatches"
+  ],
+  "browser_tests": [
+    "all 45 JSONs imported through directory picker",
+    "all 45 graphs rendered with 48/48 match at boundary 8",
+    "boundaries 1, 5, and 16 checked interactively",
+    "SVG boundary selection by keyboard",
+    "promotion step controls and play/pause",
+    "trip color isolation",
+    "multiple-file picker",
+    "missing word requests manual input",
+    "invalid JSON is skipped with error message",
+    "manual wrong tableau reports 8/48 match",
+    "SVG export has standalone stroke/fill attributes",
+    "computed JSON export has 48 matches",
+    "no browser runtime errors"
+  ],
+  "original_jsons_modified": false,
+  "runtime_dependencies": [],
+  "application_sha256": "075199c3d536575c908d31f6dc4de68ae408e55b65c269e3ae5bd8a698723309"
+}

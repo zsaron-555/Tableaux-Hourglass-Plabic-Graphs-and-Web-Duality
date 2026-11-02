@@ -1,0 +1,98 @@
+{
+  "schema": "sl4_lemma49_zero_pair_v1",
+  "id": "sl4_lemma49_extra_outer_pair_four_fan",
+  "source": {
+    "document": "codex-clipboard-d5d2bbdb-df93-417b-ab9e-8f766098d278.png",
+    "case": "extra_outer_pair_four_fan",
+    "description": "User-supplied additional forbidden pair: outer boundary pair plus four-leaf fan versus three-port zigzag"
+  },
+  "matching": {
+    "same_boundary_interval": true,
+    "allow_reflection": true,
+    "allow_pair_swap": true,
+    "rotation_order_source": "counterclockwise_from_embedding",
+    "crossings_are_not_vertices": true
+  },
+  "conclusion": {
+    "action": "discharge_pair",
+    "reason": "sl4_lemma49_extra_outer_pair_four_fan",
+    "pairing_value": 0
+  },
+  "W": {
+    "boundary_order": ["b1", "b2", "b3", "b4", "b5", "b6"],
+    "ports": ["p1", "p2"],
+    "nodes": [
+      {"id":"b1","role":"disk_boundary","color":"black","x":-1.00,"y":0.00},
+      {"id":"b2","role":"disk_boundary","color":"black","x":-0.60,"y":-0.10},
+      {"id":"b3","role":"disk_boundary","color":"black","x":-0.20,"y":-0.16},
+      {"id":"b4","role":"disk_boundary","color":"black","x":0.20,"y":-0.16},
+      {"id":"b5","role":"disk_boundary","color":"black","x":0.60,"y":-0.10},
+      {"id":"b6","role":"disk_boundary","color":"black","x":1.00,"y":0.00},
+      {"id":"wo","role":"internal","color":"white","x":0.00,"y":1.05},
+      {"id":"wf","role":"internal","color":"white","x":0.00,"y":0.43},
+      {"id":"p1","role":"window_port","color":"open","x":-0.38,"y":1.53},
+      {"id":"p2","role":"window_port","color":"open","x":0.38,"y":1.53}
+    ],
+    "edges": [
+      {"id":"e1","u":"wo","v":"b1","kind":"ordinary","multiplicity":1},
+      {"id":"e2","u":"wo","v":"b6","kind":"ordinary","multiplicity":1},
+      {"id":"e3","u":"wo","v":"p1","kind":"ordinary","multiplicity":1},
+      {"id":"e4","u":"wo","v":"p2","kind":"ordinary","multiplicity":1},
+      {"id":"e5","u":"wf","v":"b2","kind":"ordinary","multiplicity":1},
+      {"id":"e6","u":"wf","v":"b3","kind":"ordinary","multiplicity":1},
+      {"id":"e7","u":"wf","v":"b4","kind":"ordinary","multiplicity":1},
+      {"id":"e8","u":"wf","v":"b5","kind":"ordinary","multiplicity":1}
+    ],
+    "crossings": []
+  },
+  "X": {
+    "boundary_order": ["b1", "b2", "b3", "b4", "b5", "b6"],
+    "ports": ["p1", "p2", "p3", "q1", "q2", "q3", "q4", "q5"],
+    "nodes": [
+      {"id":"b1","role":"disk_boundary","color":"black","x":-1.00,"y":0.00},
+      {"id":"b2","role":"disk_boundary","color":"black","x":-0.60,"y":-0.10},
+      {"id":"b3","role":"disk_boundary","color":"black","x":-0.20,"y":-0.16},
+      {"id":"b4","role":"disk_boundary","color":"black","x":0.20,"y":-0.16},
+      {"id":"b5","role":"disk_boundary","color":"black","x":0.60,"y":-0.10},
+      {"id":"b6","role":"disk_boundary","color":"black","x":1.00,"y":0.00},
+      {"id":"u1","role":"internal","color":"white","x":-0.72,"y":1.08},
+      {"id":"k1","role":"internal","color":"black","x":-0.34,"y":0.78},
+      {"id":"u2","role":"internal","color":"white","x":0.00,"y":1.08},
+      {"id":"k2","role":"internal","color":"black","x":0.34,"y":0.78},
+      {"id":"u3","role":"internal","color":"white","x":0.72,"y":1.08},
+      {"id":"l1","role":"internal","color":"white","x":-0.34,"y":0.34},
+      {"id":"l2","role":"internal","color":"white","x":0.34,"y":0.34},
+      {"id":"p1","role":"window_port","color":"open","x":-0.72,"y":1.58},
+      {"id":"p2","role":"window_port","color":"open","x":0.00,"y":1.58},
+      {"id":"p3","role":"window_port","color":"open","x":0.72,"y":1.58},
+      {"id":"q1","role":"window_port","color":"open","x":-1.06,"y":0.52},
+      {"id":"q2","role":"window_port","color":"open","x":-0.58,"y":0.38},
+      {"id":"q3","role":"window_port","color":"open","x":-0.10,"y":0.38},
+      {"id":"q4","role":"window_port","color":"open","x":0.10,"y":0.38},
+      {"id":"q5","role":"window_port","color":"open","x":1.06,"y":0.52}
+    ],
+    "edges": [
+      {"id":"e1","u":"u1","v":"k1","kind":"ordinary","multiplicity":1},
+      {"id":"e2","u":"k1","v":"u2","kind":"ordinary","multiplicity":1},
+      {"id":"e3","u":"u2","v":"k2","kind":"ordinary","multiplicity":1},
+      {"id":"e4","u":"k2","v":"u3","kind":"ordinary","multiplicity":1},
+      {"id":"e5","u":"k1","v":"l1","kind":"ordinary","multiplicity":1},
+      {"id":"e6","u":"k2","v":"l2","kind":"ordinary","multiplicity":1},
+      {"id":"e7","u":"u1","v":"b1","kind":"ordinary","multiplicity":1},
+      {"id":"e8","u":"u1","v":"b2","kind":"ordinary","multiplicity":1},
+      {"id":"e9","u":"l1","v":"b3","kind":"ordinary","multiplicity":1},
+      {"id":"e10","u":"l2","v":"b4","kind":"ordinary","multiplicity":1},
+      {"id":"e11","u":"u3","v":"b5","kind":"ordinary","multiplicity":1},
+      {"id":"e12","u":"u3","v":"b6","kind":"ordinary","multiplicity":1},
+      {"id":"e13","u":"u1","v":"p1","kind":"ordinary","multiplicity":1},
+      {"id":"e14","u":"u2","v":"p2","kind":"ordinary","multiplicity":1},
+      {"id":"e15","u":"u3","v":"p3","kind":"ordinary","multiplicity":1},
+      {"id":"e16","u":"l1","v":"q2","kind":"ordinary","multiplicity":1},
+      {"id":"e17","u":"l1","v":"q3","kind":"ordinary","multiplicity":1},
+      {"id":"e18","u":"l2","v":"q4","kind":"ordinary","multiplicity":1},
+      {"id":"e19","u":"u1","v":"q1","kind":"ordinary","multiplicity":1},
+      {"id":"e20","u":"u3","v":"q5","kind":"ordinary","multiplicity":1}
+    ],
+    "crossings": []
+  }
+}
